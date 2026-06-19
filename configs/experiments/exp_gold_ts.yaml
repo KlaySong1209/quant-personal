@@ -1,0 +1,51 @@
+mode: "futures"
+
+run:
+  name: "exp_gold_ts"
+  seed: 42
+
+data:
+  source: "synthetic_futures"
+  symbol: "AU"
+  continuous_symbol: "AU_CONT"
+  start: "2020-01-01"
+  synthetic:
+    n_contracts: 4
+    days_per_contract: 80
+    overlap_days: 15
+    initial_underlying_price: 500.0
+    annual_drift: 0.02
+    annual_vol: 0.15
+    basis_per_contract: 2.0
+  roll:
+    method: "back_adjusted"
+    rule: "calendar"
+    calendar_days_before_expiry: 5
+    max_implausible_log_return: 0.20
+  validation:
+    max_missing_ratio: 0.01
+
+instruments:
+  specs: ["configs/instruments/gold_futures.yaml"]
+
+strategy:
+  name: "ts_trend"
+  params:
+    lookback: 20
+    target_weight: 1.0
+
+portfolio:
+  initial_equity: 100000.0
+  rebalance: "daily"
+
+costs:
+  commission_bps: 0.5
+  slippage_bps: 1.0
+  spread_bps: 1.0
+  allow_zero_cost_for_tests: false
+
+risk:
+  max_symbol_notional: 100000.0
+  max_gross_notional: 100000.0
+  max_margin_use: 0.5
+  reject_nan: true

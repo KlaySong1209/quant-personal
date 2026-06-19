@@ -1,0 +1,61 @@
+run:
+  name: "default"
+  seed: 42
+
+data:
+  source: "synthetic"
+  csv_path: "data/example"
+  symbols: ["AAA", "BBB", "CCC"]
+  start: "2020-01-01"
+  end: "2024-12-31"
+  synthetic:
+    initial_price: 100.0
+    annual_drift: 0.05
+    annual_vol: 0.20
+  validation:
+    max_missing_ratio: 0.01
+  corporate_actions:
+    enabled: false
+    path:
+    column_map: {}
+    max_unadjusted_log_return: 0.25
+  universe:
+    source: "all"
+    path:
+    column_map: {}
+    delisted_symbol:
+    delist_date:
+  calendar:
+    source: "synthetic"
+    exchange: "SYNTH"
+    path:
+    column_map: {}
+
+strategy:
+  name: "placeholder"
+  params:
+    fast_window: 10
+    slow_window: 30
+
+portfolio:
+  initial_equity: 100000.0
+  rebalance: "daily"
+
+costs:
+  bps: 5.0
+  slippage_bps: 1.0
+  spread_bps: 2.0
+  allow_zero_cost_for_tests: false
+
+risk:
+  max_symbol_weight: 1.0
+  max_gross_leverage: 1.0
+  reject_nan: true
+
+execution:
+  broker: "paper"
+  paper:
+    starting_cash: 100000.0
+    allow_short: false
+    allow_margin: false
+    max_gross_leverage: 1.0

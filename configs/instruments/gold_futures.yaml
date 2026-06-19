@@ -1,0 +1,5 @@
+AU:
+  asset_class: "futures"
+  contract_multiplier: 1000.0
+  initial_margin_rate: 0.10
+  stamp_duty_bps: 0.0

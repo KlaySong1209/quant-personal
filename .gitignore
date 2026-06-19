@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.pycache_tmp/
+.pip-cache/
+.deps/
+.venv/
+.matplotlib/
+results/*
+!results/.gitkeep
+logs/*
+!logs/.gitkeep
+data/example/*.csv
+*.egg-info/
+.DS_Store

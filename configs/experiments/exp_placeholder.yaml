@@ -1,0 +1,38 @@
+run:
+  name: "exp_placeholder"
+  seed: 42
+
+data:
+  source: "synthetic"
+  symbols: ["AAA", "BBB", "CCC"]
+  start: "2020-01-01"
+  end: "2024-12-31"
+
+strategy:
+  name: "placeholder"
+  params:
+    fast_window: 10
+    slow_window: 30
+
+portfolio:
+  initial_equity: 100000.0
+  rebalance: "daily"
+
+costs:
+  bps: 5.0
+  slippage_bps: 1.0
+  spread_bps: 2.0
+  allow_zero_cost_for_tests: false
+
+risk:
+  max_symbol_weight: 1.0
+  max_gross_leverage: 1.0
+  reject_nan: true
+
+execution:
+  broker: "paper"
+  paper:
+    starting_cash: 100000.0
+    allow_short: true
+    allow_margin: true
+    max_gross_leverage: 2.0

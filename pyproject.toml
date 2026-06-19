@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "quant"
+version = "0.1.0"
+description = "Personal-use quantitative trading research system."
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [{ name = "Personal Researcher" }]
+license = { text = "MIT" }
+dependencies = [
+    "pandas>=2.0",
+    "numpy>=1.24",
+    "pyarrow>=14",
+    "pydantic>=2.0",
+    "pyyaml>=6.0",
+    "matplotlib>=3.7",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+]
+dashboard = [
+    "streamlit>=1.30",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["quant*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra -q"
+filterwarnings = [
+    "error::DeprecationWarning",
+]
