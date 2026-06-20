@@ -23,6 +23,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--stamp-duty-bps", type=float, default=5.0)
     parser.add_argument("--slippage-bps", type=float, default=1.0)
     parser.add_argument("--fill-price-rule", choices=["same_day_close", "next_day_open"], default="same_day_close")
+    parser.add_argument("--missing-open-policy", choices=["skip", "fallback_to_prev_close", "fail"], default="skip")
+    parser.add_argument("--mode", choices=["paper_simulation", "demo"], default="paper_simulation")
+    parser.add_argument("--production-data", action="store_true")
     args = parser.parse_args(argv)
     if args.manual_quotes:
         summary = run_manual_quote_step(
@@ -36,6 +39,9 @@ def main(argv: list[str] | None = None) -> int:
             stamp_duty_bps=args.stamp_duty_bps,
             slippage_bps=args.slippage_bps,
             fill_price_rule=args.fill_price_rule,
+            missing_open_policy=args.missing_open_policy,
+            mode=args.mode,
+            production_data=args.production_data,
         )
     else:
         summary = run_paper_session(
@@ -48,6 +54,9 @@ def main(argv: list[str] | None = None) -> int:
             stamp_duty_bps=args.stamp_duty_bps,
             slippage_bps=args.slippage_bps,
             fill_price_rule=args.fill_price_rule,
+            missing_open_policy=args.missing_open_policy,
+            mode=args.mode,
+            production_data=args.production_data,
         )
     print(format_paper_session_plain(summary))
     return 0

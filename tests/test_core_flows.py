@@ -75,6 +75,17 @@ class TestAppAndEndToEnd(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertIn("generate example data", proc.stdout.lower())
 
+    def test_paper_session_script_help_exposes_mode_and_missing_open_policy(self) -> None:
+        proc = subprocess.run(
+            [sys.executable, "scripts/run_paper_session.py", "--help"],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("--missing-open-policy", proc.stdout)
+        self.assertIn("--mode", proc.stdout)
+
     def test_dashboard_import(self) -> None:
         import dashboard.app_streamlit as dashboard_app
 

@@ -11,6 +11,7 @@ Covers:
 
 from __future__ import annotations
 
+import json
 import unittest
 import tempfile
 from pathlib import Path
@@ -238,6 +239,90 @@ class TestManualQuoteSourceWithOpen(unittest.TestCase):
         # snapshot without open column is fine
         snapshot = source.snapshot(["000001", "000002", "000003"])
         self.assertNotIn("open", snapshot.columns)
+
+
+class TestAppNextDayOpenIntegration(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+
+    def test_manual_quote_step_uses_open_for_next_day_open_fill(self):
+        from quant.app import run_manual_quote_step
+
+        root = Path(self.tmpdir)
+        quote_path = root / "quotes.csv"
+        state_path = root / "state.json"
+        quote_path.write_text(
+            "date,symbol,open,close\n"
+            "2020-01-01,AAA,9,10\n"
+            "2020-01-01,BBB,19,20\n"
+            "2020-01-01,CCC,29,30\n"
+            "2020-01-02,AAA,11,99\n"
+            "2020-01-02,BBB,21,88\n"
+            "2020-01-02,CCC,31,77\n",
+            encoding="utf-8",
+        )
+        run_manual_quote_step(
+            quote_path=quote_path,
+            symbols=["AAA", "BBB", "CCC"],
+            state_path=state_path,
+            output_dir=root / "out",
+            starting_cash=9000.0,
+            as_of="2020-01-01",
+            fill_price_rule="next_day_open",
+        )
+        run_manual_quote_step(
+            quote_path=quote_path,
+            symbols=["AAA", "BBB", "CCC"],
+            state_path=state_path,
+            output_dir=root / "out",
+            starting_cash=9000.0,
+            as_of="2020-01-02",
+            fill_price_rule="next_day_open",
+        )
+
+        saved = json.loads(state_path.read_text(encoding="utf-8"))
+        filled = [order for order in saved["pending_orders"] if order["status"] == "filled"]
+        self.assertEqual(len(filled), 1)
+        self.assertEqual(filled[0]["fill_prices"], {"AAA": 11.0, "BBB": 21.0, "CCC": 31.0})
+
+    def test_processed_paper_session_uses_open_for_next_day_open_fill(self):
+        from quant.app import run_paper_session
+
+        root = Path(self.tmpdir)
+        processed_path = root / "processed.csv"
+        state_path = root / "state.json"
+        rows = []
+        for ts, values in [
+            ("2020-01-01T00:00:00Z", {"AAA": (9, 10), "BBB": (19, 20), "CCC": (29, 30)}),
+            ("2020-01-02T00:00:00Z", {"AAA": (11, 99), "BBB": (21, 88), "CCC": (31, 77)}),
+        ]:
+            for symbol, (open_price, close_price) in values.items():
+                rows.append(
+                    {
+                        "timestamp": ts,
+                        "symbol": symbol,
+                        "open": open_price,
+                        "high": max(open_price, close_price) + 1,
+                        "low": min(open_price, close_price) - 1,
+                        "close": close_price,
+                        "volume": 1000,
+                    }
+                )
+        pd.DataFrame(rows).to_csv(processed_path, index=False)
+
+        run_paper_session(
+            data_path=processed_path,
+            symbols=["AAA", "BBB", "CCC"],
+            state_path=state_path,
+            output_dir=root / "out",
+            starting_cash=9000.0,
+            fill_price_rule="next_day_open",
+        )
+
+        saved = json.loads(state_path.read_text(encoding="utf-8"))
+        filled = [order for order in saved["pending_orders"] if order["status"] == "filled"]
+        self.assertEqual(len(filled), 1)
+        self.assertEqual(filled[0]["fill_prices"], {"AAA": 11.0, "BBB": 21.0, "CCC": 31.0})
 
 
 if __name__ == "__main__":

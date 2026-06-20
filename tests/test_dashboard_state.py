@@ -52,6 +52,23 @@ class TestPaperAccountStatus(unittest.TestCase):
         self.assertEqual(status["label"], DEMO_LABEL)
         self.assertIsNotNone(status["final_equity"])
 
+    def test_demo_state_rejected_in_production_data_context(self):
+        state_path = Path(self.tmpdir) / "demo_account.json"
+        account = SimAccount(
+            "demo-1", 100000.0,
+            mode="demo",
+            allow_zero_cost_for_tests=True,
+        )
+        account.step(
+            pd.Timestamp("2020-01-01", tz="UTC"),
+            prices={"000001": 10.0, "000002": 20.0, "000003": 30.0},
+            target_weights={"000001": 0.5, "000002": 0.3, "000003": 0.2},
+            save_path=state_path,
+        )
+        status = paper_account_status(state_path, production_data=True)
+        self.assertEqual(status["state_type"], "no_state")
+        self.assertIn("demo", status["error"].lower())
+
     def test_paper_simulation_returns_paper_simulation(self):
         state_path = Path(self.tmpdir) / "paper_account.json"
         account = SimAccount(

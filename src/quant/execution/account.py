@@ -281,14 +281,19 @@ class SimAccount:
         *,
         prices: dict[str, float],
         target_weights: dict[str, float],
+        open_prices: dict[str, float] | None = None,
         save_path: str | Path | None = None,
     ) -> dict[str, Any]:
         """Advance the account by one day-step.
 
         For *same_day_close*: trades execute immediately at *prices*.
         For *next_day_open*:
-          1. Fill any pending orders from the previous step using today's *prices* as open.
+          1. Fill any pending orders from the previous step using today's *open_prices*.
           2. Create a new pending order from *target_weights* (to be filled next step).
+
+        In next_day_open mode, *prices* are the decision/mark-to-market prices
+        for the current day.  When *open_prices* is omitted, *prices* are used as
+        the fill prices for backwards compatibility with direct account tests.
         """
         ts = pd.Timestamp(timestamp)
         if ts.tzinfo is None:
@@ -303,8 +308,15 @@ class SimAccount:
 
         clean_prices = {str(sym): float(price) for sym, price in prices.items()}
         clean_weights = {str(sym): float(weight) for sym, weight in target_weights.items()}
+        clean_open_prices = (
+            {str(sym): float(price) for sym, price in open_prices.items()}
+            if open_prices is not None
+            else None
+        )
         if any((not np.isfinite(price)) or price <= 0 for price in clean_prices.values()):
             raise ValueError("prices must be finite and strictly positive")
+        if clean_open_prices is not None and any((not np.isfinite(price)) or price <= 0 for price in clean_open_prices.values()):
+            raise ValueError("open_prices must be finite and strictly positive")
         if any(not np.isfinite(weight) for weight in clean_weights.values()):
             raise ValueError("target weights must be finite")
         gross = sum(abs(weight) for weight in clean_weights.values())
@@ -317,7 +329,8 @@ class SimAccount:
         fill_results: list[dict[str, Any]] = []
         if self.fill_price_rule == "next_day_open":
             # 2a. Fill pending orders from previous step using today's open
-            fill_results = self._fill_pending_orders(ts, clean_prices)
+            fill_prices = clean_open_prices if clean_open_prices is not None else clean_prices
+            fill_results = self._fill_pending_orders(ts, fill_prices)
             # 2b. Create new pending order from today's close (will fill at T+1 open)
             self._create_pending_order(ts, clean_weights, clean_prices)
             # For next_day_open, we don't execute the target_weights now.
