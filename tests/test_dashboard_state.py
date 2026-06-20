@@ -135,6 +135,47 @@ class TestDashboardImport(unittest.TestCase):
             self.skipTest("dashboard module not found on path")
         # Just verify the module can be located
 
+    def test_dashboard_status_report_view_data_present(self):
+        import importlib.util
+        spec = importlib.util.find_spec("dashboard.app_streamlit")
+        if spec is None:
+            self.skipTest("dashboard module not found on path")
+
+        import dashboard.app_streamlit as dashboard
+
+        report = {
+            "account": {"account_id": "paper-1", "advanced_to": "2020-01-02", "steps": 2},
+            "equity": {
+                "total_equity": 100500.0,
+                "cash": 50000.0,
+                "position_value": 50500.0,
+                "ledger_balanced": True,
+            },
+            "pending_orders": [
+                {
+                    "order_id": "pending-1",
+                    "created_on": "2020-01-02",
+                    "status": "pending",
+                    "reason": "waiting for next trading day open",
+                }
+            ],
+            "assumptions": {
+                "fill_price_rule": "next_day_open",
+                "missing_open_policy": "skip",
+            },
+            "positions": [{"symbol": "AAA", "shares": 10.0, "price": 10.0, "value": 100.0}],
+            "flags": ["1 pending order(s) waiting for next-day open fill"],
+            "error": None,
+        }
+
+        view_data = dashboard._status_report_view_data(report)
+
+        self.assertEqual(view_data["account_id"], "paper-1")
+        self.assertEqual(view_data["advanced_to"], "2020-01-02")
+        self.assertEqual(view_data["metrics"]["total_equity"], 100500.0)
+        self.assertEqual(view_data["assumptions"]["fill_price_rule"], "next_day_open")
+        self.assertEqual(view_data["pending_orders"][0]["status"], "pending")
+
 
 if __name__ == "__main__":
     unittest.main()

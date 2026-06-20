@@ -26,6 +26,7 @@ if str(_PROJECT) not in sys.path:
     sys.path.insert(0, str(_PROJECT))
 
 from quant.app import paper_account_status, format_metrics_plain, load_run_summary, list_runs  # noqa: E402
+from quant.report import account_report, backtest_report, combined_report  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -373,13 +374,122 @@ def _render_onboarding() -> None:
 
     1. **Generate example data** — `python -m quant --generate-example-data`
     2. **Ingest your local data** — `python -m quant --ingest-local-data ...`
-    3. **Run a paper session** — `python scripts/run_paper_session.py ...`
+    3. **Run the daily loop** — `python -m quant --daily ...`
+    4. **Or run a paper session** — `python scripts/run_paper_session.py ...`
 
     See [Getting Started](docs/GETTING_STARTED.md) for full instructions.
 
     Once you have a paper account, reload this dashboard to see your portfolio.
     """)
     st.info("No account state found. Start a paper session to populate the dashboard.")
+
+
+def _status_report_view_data(report: dict[str, Any]) -> dict[str, Any]:
+    """Shape the status report into dashboard view data without computing state."""
+    account = report.get("account") or {}
+    equity = report.get("equity") or {}
+    return {
+        "error": report.get("error"),
+        "account_id": account.get("account_id", "Unknown"),
+        "advanced_to": account.get("advanced_to"),
+        "steps": account.get("steps", 0),
+        "flags": report.get("flags", []) or [],
+        "metrics": {
+            "total_equity": equity.get("total_equity"),
+            "cash": equity.get("cash"),
+            "position_value": equity.get("position_value"),
+            "ledger_balanced": equity.get("ledger_balanced"),
+        },
+        "pending_orders": report.get("pending_orders", []) or [],
+        "assumptions": report.get("assumptions") or {},
+        "positions": report.get("positions", []) or [],
+        "has_account": bool(account),
+    }
+
+
+def _render_status_report(report: dict[str, Any]) -> None:
+    """Render the Task-2 status report as the primary dashboard view."""
+    view_data = _status_report_view_data(report)
+    if view_data.get("error"):
+        st.error(f"Report error: {view_data['error']}")
+        return
+
+    # --- Account identity ---
+    if not view_data["has_account"]:
+        st.info("No account data available.")
+        return
+
+    st.subheader(f"Account: {view_data['account_id']}")
+    if view_data.get("advanced_to"):
+        st.caption(f"Advanced to: {view_data['advanced_to']} ({view_data.get('steps', 0)} steps)")
+
+    # --- Flags / warnings ---
+    flags = view_data["flags"]
+    for flag in flags:
+        if "skipped" in flag.lower() or "failed" in flag.lower():
+            st.warning(f":warning: {flag}")
+        else:
+            st.info(flag)
+
+    # --- Equity decomposition ---
+    metrics = view_data["metrics"]
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        total = metrics.get("total_equity")
+        st.metric("Total Equity", f"¥{total:,.2f}" if total is not None else "N/A")
+    with col2:
+        cash = metrics.get("cash")
+        st.metric("Cash", f"¥{cash:,.2f}" if cash is not None else "N/A")
+    with col3:
+        pv = metrics.get("position_value")
+        st.metric("Position Value", f"¥{pv:,.2f}" if pv is not None else "N/A")
+    with col4:
+        ledger = metrics.get("ledger_balanced")
+        if ledger is True:
+            st.metric("Ledger", ":white_check_mark: BALANCED")
+        elif ledger is False:
+            st.metric("Ledger", ":warning: CHECK")
+        else:
+            st.metric("Ledger", "N/A")
+
+    # --- Pending orders ---
+    pending = view_data["pending_orders"]
+    if pending:
+        st.markdown("---")
+        st.subheader("Pending Orders")
+        for po in pending:
+            status_emoji = {"pending": ":hourglass:", "filled": ":white_check_mark:", "skipped": ":no_entry:", "failed": ":x:"}
+            emoji = status_emoji.get(po.get("status", ""), "")
+            st.markdown(
+                f"{emoji} **[{po.get('status', '').upper()}]** `{po.get('order_id', '')}` — "
+                f"created {po.get('created_on', '')}"
+            )
+            if po.get("reason"):
+                st.caption(f"  {po['reason']}")
+
+    # --- Assumptions ---
+    st.markdown("---")
+    st.subheader("Assumptions")
+    assumptions = view_data["assumptions"]
+    cols = st.columns(3)
+    for i, (key, value) in enumerate(sorted(assumptions.items())):
+        with cols[i % 3]:
+            st.metric(key, str(value))
+
+    # --- Positions ---
+    st.markdown("---")
+    st.subheader("Positions")
+    positions = view_data["positions"]
+    if positions:
+        pos_data = {
+            "Symbol": [p["symbol"] for p in positions],
+            "Shares": [f"{p['shares']:,.0f}" for p in positions],
+            "Price": [f"¥{p['price']:,.2f}" for p in positions],
+            "Value": [f"¥{p['value']:,.2f}" for p in positions],
+        }
+        st.dataframe(pos_data, use_container_width=True)
+    else:
+        st.caption("No open positions.")
 
 
 def main() -> None:
@@ -410,43 +520,38 @@ def main() -> None:
         _render_onboarding()
         return
 
-    # Demo or paper_simulation — show account
+    # Banner
     if state_type == "demo":
         _render_demo_banner()
     else:
         _render_paper_simulation_banner()
 
-    st.title(f"Account: {status.get('account_id', 'Unknown')}")
+    # === TASK 4: Status report as primary top view ===
+    report = account_report(app.PROJECT_ROOT / "state" / "paper_account.json")
+    _render_status_report(report)
 
-    # Account summary cards
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
-        equity = status.get("final_equity")
-        st.metric("Equity", f"¥{equity:,.2f}" if equity is not None else "N/A")
-    with col2:
-        cash = status.get("final_cash")
-        st.metric("Cash", f"¥{cash:,.2f}" if cash is not None else "N/A")
-    with col3:
-        steps = status.get("steps")
-        st.metric("Steps", str(steps) if steps is not None else "N/A")
-    with col4:
-        st.metric("Mode", state_type)
-
-    # Positions
-    st.subheader("Positions")
-    positions = status.get("positions")
-    if positions:
-        st.json(positions)
-    else:
-        st.caption("No positions recorded.")
-
-    # Assumptions
-    with st.expander("Assumptions"):
-        assumptions = status.get("assumptions")
-        if assumptions:
-            st.json(assumptions)
-        else:
-            st.caption("No assumptions recorded.")
+    # --- Charts / equity curve below ---
+    status_path = app.PROJECT_ROOT / "state" / "paper_account.json"
+    if status_path.exists():
+        st.markdown("---")
+        st.subheader("Equity History")
+        try:
+            import json as _json
+            data = _json.loads(status_path.read_text(encoding="utf-8"))
+            history = data.get("history", [])
+            if history:
+                import pandas as pd
+                eq_df = pd.DataFrame(history)
+                if "timestamp" in eq_df.columns and "equity" in eq_df.columns:
+                    eq_df["timestamp"] = pd.to_datetime(eq_df["timestamp"])
+                    eq_df = eq_df.set_index("timestamp").sort_index()
+                    st.line_chart(eq_df[["equity"]], use_container_width=True)
+                    # Also show cash + position_value if available
+                    if "cash" in eq_df.columns and "position_value" in eq_df.columns:
+                        st.caption("Cash and position value over time")
+                        st.line_chart(eq_df[["cash", "position_value"]], use_container_width=True)
+        except Exception:
+            st.caption("Equity history not available.")
 
     # --- Run Results ---
     st.sidebar.markdown("---")
@@ -456,10 +561,18 @@ def main() -> None:
         selected = st.sidebar.selectbox("Select run", [str(r) for r in runs])
         if selected:
             try:
-                summary = load_run_summary(selected)
+                bt_report = backtest_report(selected)
                 st.markdown("---")
                 st.subheader("Latest Backtest")
-                st.text(format_metrics_plain(summary["metrics"]))
+                if bt_report.get("error"):
+                    st.error(bt_report["error"])
+                else:
+                    for ml in bt_report.get("metric_lines", []):
+                        col1, col2 = st.columns([1, 3])
+                        with col1:
+                            st.metric(ml["key"], f"{ml['value']:+.4f}")
+                        with col2:
+                            st.caption(ml["description"])
             except Exception as exc:
                 st.sidebar.error(f"Failed to load run: {exc}")
     else:

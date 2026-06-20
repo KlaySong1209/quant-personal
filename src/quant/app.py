@@ -628,9 +628,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--commission-bps", type=float, default=1.0)
     parser.add_argument("--stamp-duty-bps", type=float, default=5.0)
     parser.add_argument("--slippage-bps", type=float, default=1.0)
-    parser.add_argument("--fill-price-rule", choices=["same_day_close", "next_day_open"], default="same_day_close")
+    parser.add_argument("--fill-price-rule", choices=["same_day_close", "next_day_open"])
     parser.add_argument("--missing-open-policy", choices=["skip", "fallback_to_prev_close", "fail"], default="skip")
     parser.add_argument("--mode", choices=["paper_simulation", "demo"], default="paper_simulation")
+    parser.add_argument("--daily", action="store_true", help="run end-of-day daily loop")
+    parser.add_argument("--data-dir", type=Path, default=PROJECT_ROOT / "data" / "processed")
+    parser.add_argument("--quotes-dir", type=Path, default=PROJECT_ROOT / "data" / "quotes")
+    parser.add_argument("--with-backtest", action="store_true", help="also run backtest as part of daily loop")
+    parser.add_argument("--report", action="store_true", help="print account status report")
     args = parser.parse_args(argv)
     if args.generate_example_data:
         for path in generate_example_data():
@@ -691,6 +696,27 @@ def main(argv: list[str] | None = None) -> int:
         )
         print(f"wrote {path}")
         return 0
+    if args.daily:
+        from quant.loop import run_daily
+        result = run_daily(
+            state_path=args.account_state,
+            data_dir=args.data_dir,
+            quotes_dir=args.quotes_dir,
+            data_path=args.run_paper_session,
+            quote_path=args.manual_quotes,
+            symbols=args.symbols,
+            run_backtest=args.with_backtest,
+            starting_cash=args.starting_cash,
+            fill_price_rule=args.fill_price_rule or "next_day_open",
+            missing_open_policy=args.missing_open_policy,
+            mode=args.mode,
+            production_data=args.production_data,
+        )
+        print(result["report_text"])
+        if result["status"] == "error":
+            print(f"\nERROR: {result['error']}")
+            return 1
+        return 0
     if args.run_paper_session:
         if not args.symbols:
             parser.error("--run-paper-session requires --symbols")
@@ -705,7 +731,7 @@ def main(argv: list[str] | None = None) -> int:
                     commission_bps=args.commission_bps,
                     stamp_duty_bps=args.stamp_duty_bps,
                     slippage_bps=args.slippage_bps,
-                    fill_price_rule=args.fill_price_rule,
+                    fill_price_rule=args.fill_price_rule or "same_day_close",
                     missing_open_policy=args.missing_open_policy,
                     mode=args.mode,
                     production_data=args.production_data,
@@ -728,7 +754,7 @@ def main(argv: list[str] | None = None) -> int:
                     commission_bps=args.commission_bps,
                     stamp_duty_bps=args.stamp_duty_bps,
                     slippage_bps=args.slippage_bps,
-                    fill_price_rule=args.fill_price_rule,
+                    fill_price_rule=args.fill_price_rule or "same_day_close",
                     missing_open_policy=args.missing_open_policy,
                     mode=args.mode,
                     production_data=args.production_data,
@@ -736,4 +762,9 @@ def main(argv: list[str] | None = None) -> int:
             )
         )
         return 0
+    if args.report:
+        from quant.report import account_report, format_account_report
+        rep = account_report(args.account_state)
+        print(format_account_report(rep))
+        return 0 if rep.get("error") is None else 1
     return interactive_menu()
