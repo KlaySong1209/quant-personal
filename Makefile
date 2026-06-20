@@ -1,19 +1,31 @@
-.PHONY: install data backtest paper test clean all dashboard
+.PHONY: install data local-export ingest paper-session backtest paper test clean all dashboard
 
 install:
-	pip install -e .[dev]
+	pip install -e .
 
 data:
-	python scripts/make_synthetic_data.py
+	python -m quant --generate-example-data
+
+local-export:
+	python -m quant --write-synthetic-local-export data/raw/resset_daily.csv --column-mapping configs/data_mappings/resset_daily_illustrative.yaml --symbols 000001 000002 000003 --start 2020-01-01 --end 2020-01-31
+
+ingest:
+	python -m quant --ingest-local-data data/raw/resset_daily.csv --column-mapping configs/data_mappings/resset_daily_illustrative.yaml --symbols 000001 000002 000003 --adjustment-convention backward --adjusted-price-column
 
 backtest:
-	python scripts/run_backtest.py --config configs/experiments/exp_placeholder.yaml
+	python -m quant --run-config configs/experiments/exp_placeholder.yaml
 
 paper:
-	python scripts/run_paper_demo.py
+	python -m quant --paper-demo
+
+paper-session:
+	python scripts/run_paper_session.py --data data/processed/local_daily_ohlcv.parquet --symbols 000001 000002 000003
+
+manual-quote-step:
+	python scripts/run_paper_session.py --manual-quotes data/raw/manual_quotes.csv --symbols 000001 000002 000003 --as-of 2020-01-31
 
 test:
-	pytest
+	python -m unittest discover -s tests
 
 dashboard:
 	streamlit run dashboard/app_streamlit.py

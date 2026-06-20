@@ -11,8 +11,7 @@ data:
 strategy:
   name: "placeholder"
   params:
-    fast_window: 10
-    slow_window: 30
+    mode: "equal_weight"
 
 portfolio:
   initial_equity: 100000.0

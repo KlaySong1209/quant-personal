@@ -81,6 +81,30 @@ class TestAppAndEndToEnd(unittest.TestCase):
         self.assertTrue(hasattr(dashboard_app, "main"))
         self.assertTrue(hasattr(dashboard_app, "STREAMLIT_INSTALL_COMMAND"))
 
+    def test_dashboard_terminal_contract(self) -> None:
+        import dashboard.app_streamlit as dashboard_app
+
+        css = dashboard_app._terminal_css()
+        self.assertIn("quant-terminal", css)
+        self.assertIn("terminal-panel", css)
+        self.assertIn("SIMULATED / PAPER -- NOT REAL", dashboard_app.PAPER_MODE_LABEL)
+
+        snapshot = dashboard_app._paper_snapshot(
+            {
+                "label": "SIMULATED / PAPER -- NOT REAL",
+                "final_cash": 900.0,
+                "final_equity": 1000.0,
+                "steps": 3,
+                "ledger_balanced": True,
+                "positions": {"AAA": 1.0, "BBB": 0.0, "CCC": 2.0},
+                "assumptions": {"fill_price_rule": "same_day_close", "order_routing": "none"},
+            }
+        )
+        self.assertEqual(snapshot["label"], "SIMULATED / PAPER -- NOT REAL")
+        self.assertEqual(snapshot["ledger"], "BALANCED")
+        self.assertEqual(snapshot["positions"], "2 / 3")
+        self.assertIn("same_day_close", snapshot["assumptions"])
+
     def test_metric_explanations(self) -> None:
         self.assertIn("higher", app.metric_explanations()["sharpe"].lower())
 
@@ -96,4 +120,3 @@ class TestAppAndEndToEnd(unittest.TestCase):
             self.assertIn("calendar:", snap)
             metrics = json.loads((artifacts.run_dir / "metrics.json").read_text(encoding="utf-8"))
             self.assertIn("sharpe", metrics)
-

@@ -1,6 +1,6 @@
 """Generate seeded synthetic OHLCV CSVs into ``data/example/``.
 
-Thin orchestration only — all logic lives under ``quant``.
+Thin orchestration only; all logic lives under ``quant``.
 """
 
 from __future__ import annotations
@@ -15,4 +15,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

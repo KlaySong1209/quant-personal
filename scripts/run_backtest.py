@@ -1,6 +1,6 @@
 """Run a backtest from a YAML experiment config.
 
-Thin orchestration only — all logic lives under ``quant``.
+Thin orchestration only; all logic lives under ``quant``.
 """
 
 from __future__ import annotations
@@ -12,9 +12,9 @@ from quant.app import format_metrics_plain, run_backtest_experiment
 
 
 def main() -> None:
-    p = argparse.ArgumentParser(description="Run a quant-personal backtest.")
-    p.add_argument("--config", required=True, type=Path, help="Path to experiment YAML.")
-    args = p.parse_args()
+    parser = argparse.ArgumentParser(description="Run a quant-personal backtest.")
+    parser.add_argument("--config", required=True, type=Path, help="Path to experiment YAML.")
+    args = parser.parse_args()
 
     artifacts = run_backtest_experiment(args.config)
 
@@ -26,4 +26,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

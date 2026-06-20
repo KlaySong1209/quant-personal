@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class _Frozen(BaseModel):
@@ -31,6 +31,9 @@ class CorporateActionsConfig(_Frozen):
     path: str | None = None
     column_map: dict[str, str] = Field(default_factory=dict)
     max_unadjusted_log_return: float = Field(gt=0, default=0.25)
+    adjustment_convention: Literal["forward", "backward", "none"] | None = None
+    has_adjustment_factor: bool | None = None
+    dividend_tax_treatment: Literal["pre_tax", "post_tax"] | None = None
 
 
 class UniverseConfig(_Frozen):
@@ -43,14 +46,23 @@ class UniverseConfig(_Frozen):
 
 class CalendarConfig(_Frozen):
     source: Literal["synthetic", "file"] = "synthetic"
+    mode: Literal["synthetic", "file"] = "synthetic"
     exchange: str = "SYNTH"
     path: str | None = None
+    file: str | None = None
     column_map: dict[str, str] = Field(default_factory=dict)
+    column_mapping: dict[str, str] = Field(default_factory=dict)
+    date_format: str | None = None
+    timezone: str = "UTC"
 
 
 class DataConfig(_Frozen):
-    source: Literal["synthetic", "csv"]
+    source: Literal["synthetic", "csv", "local_file"]
+    production_data: bool = False
     csv_path: str = "data/example"
+    local_path: str | None = None
+    column_mapping_path: str | None = None
+    processed_output_dir: str = "data/processed"
     symbols: list[str]
     start: str
     end: str
@@ -68,6 +80,15 @@ class DataConfig(_Frozen):
         if len(set(v)) != len(v):
             raise ValueError("symbols must be unique")
         return v
+
+    @model_validator(mode="after")
+    def _production_data_requires_real_inputs(self) -> "DataConfig":
+        if self.production_data and self.source == "synthetic":
+            raise ValueError("production_data=true forbids synthetic data source")
+        cal_mode = self.calendar.mode or self.calendar.source
+        if self.production_data and cal_mode == "synthetic":
+            raise ValueError("production_data=true forbids synthetic calendar")
+        return self
 
 
 class FuturesSyntheticParams(_Frozen):
@@ -171,4 +192,3 @@ class FuturesAppConfig(_Frozen):
     portfolio: PortfolioConfig
     costs: FuturesCostsConfig
     risk: FuturesRiskCfgModel
-

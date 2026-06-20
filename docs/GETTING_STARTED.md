@@ -3,12 +3,16 @@
 This is a local research tool. It does not connect real money, brokers,
 credentials, live feeds, or validated alpha.
 
+Current scope: daily data, 3-5 stocks, local files, simulated paper account.
+Real-time data, whole-market universes, live brokers, and real strategies are
+future work.
+
 ## 10-Minute First Run
 
 1. Install the package:
 
 ```bash
-pip install -e .[dev]
+pip install -e .
 ```
 
 2. Start the main panel:
@@ -22,6 +26,8 @@ python -m quant
 - `1` to generate example data.
 - `2` to run a backtest.
 - `3` to show the latest result in plain language.
+- `7` to ingest a mapped local data file.
+- `8` to run or resume the simulated paper account.
 
 Each run writes a folder under `results/<run_id>/` with:
 
@@ -50,7 +56,14 @@ streamlit run dashboard/app_streamlit.py
 See `docs/data_ingestion.md`. Data must be local files. Configure column maps in
 YAML; do not change source code for vendor column names.
 
+Minimal command path:
+
+```bash
+python -m quant --ingest-local-data path/to/your_export.csv --column-mapping configs/data_mappings/resset_daily_illustrative.yaml --symbols 000001 000002 000003 --calendar-file path/to/calendar.csv --calendar-date-column TradingDate --calendar-is-open-column IsOpen --adjustment-convention backward --adjusted-price-column --production-data
+python scripts/run_paper_session.py --data data/processed/local_daily_ohlcv.parquet --symbols 000001 000002 000003
+python scripts/run_paper_session.py --manual-quotes data/raw/manual_quotes.csv --symbols 000001 000002 000003 --as-of 2020-01-31
+```
+
 ## Writing Your Own Strategy
 
-See `docs/how_to_build_a_strategy.md`.
-
+See `docs/where_strategy_goes.md`.

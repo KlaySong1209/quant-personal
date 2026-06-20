@@ -4,7 +4,11 @@ run:
 
 data:
   source: "synthetic"
+  production_data: false
   csv_path: "data/example"
+  local_path:
+  column_mapping_path:
+  processed_output_dir: "data/processed"
   symbols: ["AAA", "BBB", "CCC"]
   start: "2020-01-01"
   end: "2024-12-31"
@@ -19,6 +23,9 @@ data:
     path:
     column_map: {}
     max_unadjusted_log_return: 0.25
+    adjustment_convention:
+    has_adjustment_factor:
+    dividend_tax_treatment:
   universe:
     source: "all"
     path:
@@ -27,15 +34,19 @@ data:
     delist_date:
   calendar:
     source: "synthetic"
+    mode: "synthetic"
     exchange: "SYNTH"
     path:
+    file:
     column_map: {}
+    column_mapping: {}
+    date_format:
+    timezone: "UTC"
 
 strategy:
   name: "placeholder"
   params:
-    fast_window: 10
-    slow_window: 30
+    mode: "equal_weight"
 
 portfolio:
   initial_equity: 100000.0

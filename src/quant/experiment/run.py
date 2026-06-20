@@ -17,7 +17,7 @@ from quant.backtest.engine import BacktestResult, run_backtest
 from quant.backtest.metrics import compute_metrics
 from quant.config.loader import config_to_dict
 from quant.config.schema import AppConfig, FuturesAppConfig
-from quant.data.adjust.calendar import CalendarColumnMap, TradingCalendar, align_close_panel_with_tradable, load_calendar
+from quant.data.adjust.calendar import CalendarColumnMap, TradingCalendar, align_close_panel_with_tradable, build_trading_calendar, load_calendar
 from quant.data.adjust.corporate_actions import CorporateActionColumnMap, adjust_ohlcv_for_corporate_actions, flag_implausible_unadjusted_jumps, load_corporate_actions
 from quant.data.adjust.universe import UniverseColumnMap, all_symbols_universe, build_universe_mask, load_universe_membership, synthetic_universe_with_delisting
 from quant.data.futures_local import FuturesColumnMap, continuous_from_local_file
@@ -105,11 +105,13 @@ def _run_equity_experiment(cfg: AppConfig, *, results_root: Path | None, now: da
     calendar = _build_equity_calendar(cfg)
     prices, tradable = align_close_panel_with_tradable(ohlcv, symbols=list(cfg.data.symbols), calendar=calendar)
     universe = _build_equity_universe(cfg, prices.index, prices.columns)
+    local_ingestion = _load_local_ingestion_metadata(cfg)
     snapshot = config_to_dict(cfg)
     snapshot["_resolved"] = {
         "data_honesty": {
-            "adjusted_prices": bool(cfg.data.corporate_actions.enabled),
+            "adjusted_prices": _resolved_adjusted_prices(cfg, local_ingestion),
             "calendar_exchange": calendar.exchange,
+            "local_ingestion": local_ingestion,
             "pit_universe": cfg.data.universe.source,
             "tradable_mask": True,
         }
@@ -223,11 +225,26 @@ def _write_common_artifacts(run_dir: Path, run_id: str, cfg, input_df: pd.DataFr
 
 def _build_equity_calendar(cfg: AppConfig) -> TradingCalendar:
     cal = cfg.data.calendar
-    if cal.source == "file":
-        if not cal.path:
-            raise ValueError("calendar.path required")
-        return load_calendar(_project_path(cal.path), CalendarColumnMap(**cal.column_map), exchange=cal.exchange)
-    return TradingCalendar.synthetic(cfg.data.start, cfg.data.end, exchange=cal.exchange)
+    mode = cal.mode or cal.source
+    file = cal.file or cal.path
+    mapping = cal.column_mapping or cal.column_map
+    if mode == "file" and file:
+        return build_trading_calendar(
+            mode="file",
+            file=_project_path(file),
+            column_mapping=mapping,
+            exchange=cal.exchange,
+            date_format=cal.date_format,
+            timezone=cal.timezone,
+            production_data=cfg.data.production_data,
+        )
+    return build_trading_calendar(
+        mode="synthetic",
+        start=cfg.data.start,
+        end=cfg.data.end,
+        exchange=cal.exchange,
+        production_data=cfg.data.production_data,
+    )
 
 
 def _apply_equity_data_honesty(cfg: AppConfig, ohlcv: pd.DataFrame) -> pd.DataFrame:
@@ -263,6 +280,17 @@ def _build_equity_universe(cfg: AppConfig, index: pd.DatetimeIndex, symbols: pd.
 
 
 def _compute_input_hashes(cfg, input_df: pd.DataFrame) -> dict[str, str]:
+    if hasattr(cfg, "data") and getattr(cfg.data, "source", "") == "local_file":
+        out = {"input_frame": hash_dataframe(input_df)}
+        if cfg.data.local_path:
+            path = _project_path(cfg.data.local_path)
+            if path.exists():
+                out[path.name] = hash_file(path)
+        if cfg.data.column_mapping_path:
+            path = _project_path(cfg.data.column_mapping_path)
+            if path.exists():
+                out[path.name] = hash_file(path)
+        return out
     if hasattr(cfg, "data") and getattr(cfg.data, "source", "") == "csv":
         out = {}
         csv_dir = _project_path(cfg.data.csv_path)
@@ -272,3 +300,19 @@ def _compute_input_hashes(cfg, input_df: pd.DataFrame) -> dict[str, str]:
                 out[path.name] = hash_file(path)
         return out
     return {"input_frame": hash_dataframe(input_df)}
+
+
+def _load_local_ingestion_metadata(cfg: AppConfig) -> dict | None:
+    if cfg.data.source != "local_file":
+        return None
+    path = _project_path(cfg.data.processed_output_dir) / "local_daily_metadata.json"
+    if not path.exists():
+        return None
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _resolved_adjusted_prices(cfg: AppConfig, local_ingestion: dict | None) -> bool:
+    if local_ingestion:
+        method = local_ingestion.get("adjustment", {}).get("method")
+        return method in {"provided_adjusted_close", "provided_adjustment_factor", "built_from_dividends_splits"}
+    return bool(cfg.data.corporate_actions.enabled)

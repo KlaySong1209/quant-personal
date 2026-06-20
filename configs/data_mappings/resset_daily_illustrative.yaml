@@ -1,0 +1,16 @@
+# Illustrative only. Verify these names against your actual RESSET export.
+columns:
+  timestamp: Trddt
+  symbol: Stkcd
+  open: Opnprc
+  high: Hiprc
+  low: Loprc
+  close: Clsprc
+  volume: Dnshrtrd
+  adjusted_close: AdjClsprc
+  adjustment_factor: AdjFactor
+  dividend: Dvdnt
+  dividend_ex_date: ExDate
+  split: SplitRatio
+  bonus: BonusShareRatio
+  conversion: TransferShareRatio

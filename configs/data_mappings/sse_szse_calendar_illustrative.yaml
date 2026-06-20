@@ -1,0 +1,4 @@
+# Illustrative only. Verify column names against your actual exchange calendar export.
+columns:
+  date: TradingDate
+  is_open: IsOpen
