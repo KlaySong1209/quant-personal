@@ -27,6 +27,11 @@ from quant.execution.corporate_actions import (
     apply_corporate_action,
     AppliedCorporateAction,
 )
+from quant.execution.ashare import (
+    AShareExecutionConfig,
+    execute_rebalance,
+    validate_execution_adjustment,
+)
 from quant.execution.paper import PaperBroker
 
 PAPER_SIMULATION_LABEL = "SIMULATED / PAPER -- NOT REAL"
@@ -92,6 +97,9 @@ class SimAccount:
     missing_open_policy: MissingOpenPolicy = "skip"
     allow_zero_cost_for_tests: bool = False
     mode: AccountMode = "paper_simulation"
+    execution_adjustment: str = "none"
+    lot_size: int = 1
+    tick_size: float = 0.01
     broker: PaperBroker = field(init=False)
     _history: list[dict[str, Any]] = field(default_factory=list)
     _completed_steps: set[str] = field(default_factory=set)
@@ -99,6 +107,7 @@ class SimAccount:
     _corporate_actions: list[CorporateAction] = field(default_factory=list)
     _applied_ca_records: list[AppliedCorporateAction] = field(default_factory=list)
     _pending_orders: list[PendingOrder] = field(default_factory=list)
+    _available_shares: dict[str, float] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if self.fill_price_rule not in {"same_day_close", "next_day_open"}:
@@ -107,6 +116,11 @@ class SimAccount:
             raise ValueError("missing_open_policy must be 'skip', 'fallback_to_prev_close', or 'fail'")
         if self.mode not in {"paper_simulation", "demo"}:
             raise ValueError("mode must be 'paper_simulation' or 'demo'")
+        validate_execution_adjustment(self.execution_adjustment)
+        if self.lot_size <= 0:
+            raise ValueError("lot_size must be positive")
+        if self.tick_size <= 0:
+            raise ValueError("tick_size must be positive")
         self.cost_model = AShareCostModel(
             commission_bps=self.commission_bps,
             stamp_duty_bps=self.stamp_duty_bps,
@@ -173,7 +187,15 @@ class SimAccount:
     # Pending orders (next_day_open)
     # ------------------------------------------------------------------
 
-    def _fill_pending_orders(self, timestamp: pd.Timestamp, prices: dict[str, float]) -> list[dict[str, Any]]:
+    def _fill_pending_orders(
+        self,
+        timestamp: pd.Timestamp,
+        prices: dict[str, float],
+        *,
+        mark_prices: dict[str, float],
+        can_buy: dict[str, bool] | None = None,
+        can_sell: dict[str, bool] | None = None,
+    ) -> list[dict[str, Any]]:
         """Attempt to fill any pending next_day_open orders using today's open prices.
 
         The open prices must be passed as *prices*; for next_day_open, the caller
@@ -209,24 +231,27 @@ class SimAccount:
             # Fill the order at open prices
             order.fill_prices = {sym: prices[sym] for sym in order.target_weights}
             order.filled_on = timestamp
-            order.status = "filled"
 
             # Execute the fill through the broker
             try:
-                self._execute_fill(timestamp, order.target_weights, order.fill_prices)
+                result = self._execute_fill(
+                    timestamp,
+                    order.target_weights,
+                    order.fill_prices,
+                    mark_prices=mark_prices,
+                    can_buy=can_buy,
+                    can_sell=can_sell,
+                    order_id=order.order_id,
+                )
             except Exception as exc:
                 order.status = "failed"
                 still_pending.append(order)
                 results.append({"order_id": order.order_id, "status": "failed", "reason": str(exc)})
                 continue
 
+            order.status = "filled" if any(r["status"] == "filled" for r in result) else "failed"
             still_pending.append(order)
-            results.append({
-                "order_id": order.order_id,
-                "status": "filled",
-                "fill_prices": order.fill_prices,
-                "degraded": order.degraded,
-            })
+            results.extend(result)
 
         self._pending_orders = still_pending
         return results
@@ -245,31 +270,44 @@ class SimAccount:
         self._pending_orders.append(order)
         return order
 
-    def _execute_fill(self, timestamp: pd.Timestamp, target_weights: dict[str, float], fill_prices: dict[str, float]) -> None:
+    def _execute_fill(
+        self,
+        timestamp: pd.Timestamp,
+        target_weights: dict[str, float],
+        fill_prices: dict[str, float],
+        *,
+        mark_prices: dict[str, float],
+        can_buy: dict[str, bool] | None = None,
+        can_sell: dict[str, bool] | None = None,
+        order_id: str | None = None,
+    ) -> list[dict[str, Any]]:
         """Execute a fill for given target weights at given fill prices.
 
         This is the core trading logic, shared between same_day_close and
         next_day_open fills.
         """
-        self.broker.update_prices(fill_prices)
-        equity_before = self.broker.mark_to_market(timestamp)
-        cost_buffer_rate = max(self.cost_model.buy_rate, self.cost_model.sell_rate)
-        investable_equity = equity_before * (1.0 - cost_buffer_rate)
-        target_shares = {
-            sym: (target_weights.get(sym, 0.0) * investable_equity) / fill_prices[sym]
-            for sym in fill_prices
-        }
-        current = self.broker.positions()
-        traded_notional = pd.Series(
-            {
-                sym: (target_shares[sym] - current.get(sym, 0.0)) * fill_prices[sym]
-                for sym in fill_prices
-            },
-            dtype="float64",
+        result = execute_rebalance(
+            timestamp=timestamp,
+            cash=self.broker.cash,
+            positions=self.broker.positions(),
+            available_shares=self._available_shares,
+            target_weights=target_weights,
+            fill_prices=fill_prices,
+            mark_prices=mark_prices,
+            cost_model=self.cost_model,
+            config=AShareExecutionConfig(
+                lot_size=self.lot_size,
+                tick_size=self.tick_size,
+                max_gross_leverage=self.max_gross_leverage,
+            ),
+            can_buy=can_buy,
+            can_sell=can_sell,
+            order_id=order_id,
         )
-        cost_breakdown = self.cost_model.per_symbol_breakdown(traded_notional)
-        self.broker.submit_target(timestamp, target_shares)
-        self.broker.apply_cash_fee(timestamp, cost_breakdown["total"])
+        self.broker.apply_execution_events(result.ledger_events)
+        self.broker.update_prices(mark_prices)
+        self._available_shares = result.available_shares
+        return result.fill_results
 
     # ------------------------------------------------------------------
     # Step
@@ -282,6 +320,8 @@ class SimAccount:
         prices: dict[str, float],
         target_weights: dict[str, float],
         open_prices: dict[str, float] | None = None,
+        can_buy: dict[str, bool] | None = None,
+        can_sell: dict[str, bool] | None = None,
         save_path: str | Path | None = None,
     ) -> dict[str, Any]:
         """Advance the account by one day-step.
@@ -325,16 +365,26 @@ class SimAccount:
 
         # 1. Apply corporate actions before trading
         self._apply_corporate_actions_before_trading(ts)
+        # Positions held at the opening of a step are sellable; shares bought
+        # inside this step become sellable at the next step.
+        self._available_shares = self.broker.positions()
 
         fill_results: list[dict[str, Any]] = []
         if self.fill_price_rule == "next_day_open":
             # 2a. Fill pending orders from previous step using today's open
             fill_prices = clean_open_prices if clean_open_prices is not None else clean_prices
-            fill_results = self._fill_pending_orders(ts, fill_prices)
+            fill_results = self._fill_pending_orders(
+                ts,
+                fill_prices,
+                mark_prices=clean_prices,
+                can_buy=can_buy,
+                can_sell=can_sell,
+            )
             # 2b. Create new pending order from today's close (will fill at T+1 open)
             self._create_pending_order(ts, clean_weights, clean_prices)
             # For next_day_open, we don't execute the target_weights now.
             # Use current broker state for equity history.
+            self.broker.update_prices(clean_prices)
             equity = self.broker.mark_to_market(ts)
             position_value = equity - self.broker.cash
             row = {
@@ -344,34 +394,25 @@ class SimAccount:
                 "position_value": float(position_value),
                 "equity": float(equity),
                 "positions": self.broker.positions(),
+                "available_shares": dict(self._available_shares),
                 "prices": clean_prices,
                 "target_weights": clean_weights,
                 "pending_orders": [o.to_dict() for o in self._pending_orders],
                 "fill_results": fill_results,
-                "costs": {"total": 0.0},
+                "costs": _aggregate_costs(fill_results),
                 "assumptions": self.assumptions(),
             }
         else:
             # same_day_close: execute immediately
-            self.broker.update_prices(clean_prices)
-            equity_before = self.broker.mark_to_market(ts)
-            cost_buffer_rate = max(self.cost_model.buy_rate, self.cost_model.sell_rate)
-            investable_equity = equity_before * (1.0 - cost_buffer_rate)
-            target_shares = {
-                sym: (clean_weights.get(sym, 0.0) * investable_equity) / price
-                for sym, price in clean_prices.items()
-            }
-            current = self.broker.positions()
-            traded_notional = pd.Series(
-                {
-                    sym: (target_shares[sym] - current.get(sym, 0.0)) * clean_prices[sym]
-                    for sym in clean_prices
-                },
-                dtype="float64",
+            fill_results = self._execute_fill(
+                ts,
+                clean_weights,
+                clean_prices,
+                mark_prices=clean_prices,
+                can_buy=can_buy,
+                can_sell=can_sell,
+                order_id=f"same-day-{ts.isoformat()}",
             )
-            cost_breakdown = self.cost_model.per_symbol_breakdown(traded_notional)
-            self.broker.submit_target(ts, target_shares)
-            self.broker.apply_cash_fee(ts, cost_breakdown["total"])
             position_value = sum(self.broker.positions().get(sym, 0.0) * clean_prices[sym] for sym in clean_prices)
             equity = self.broker.cash + position_value
             row = {
@@ -381,8 +422,10 @@ class SimAccount:
                 "position_value": float(position_value),
                 "equity": float(equity),
                 "positions": self.broker.positions(),
+                "available_shares": dict(self._available_shares),
                 "prices": clean_prices,
-                "costs": cost_breakdown,
+                "fill_results": fill_results,
+                "costs": _aggregate_costs(fill_results),
                 "assumptions": self.assumptions(),
             }
 
@@ -429,6 +472,9 @@ class SimAccount:
             missing_open_policy=str(data.get("assumptions", {}).get("missing_open_policy", "skip")),
             allow_zero_cost_for_tests=bool(data.get("assumptions", {}).get("allow_zero_cost_for_tests", False)),
             mode=str(data.get("mode", "paper_simulation")),
+            execution_adjustment=str(data.get("assumptions", {}).get("execution_adjustment", "none")),
+            lot_size=int(data.get("assumptions", {}).get("lot_size", 1)),
+            tick_size=float(data.get("assumptions", {}).get("tick_size", 0.01)),
         )
         account.broker = PaperBroker.from_dict(data["broker"])
         account._history = list(data.get("history", []))
@@ -449,6 +495,9 @@ class SimAccount:
         account._pending_orders = [
             PendingOrder.from_dict(o) for o in data.get("pending_orders", [])
         ]
+        account._available_shares = {
+            str(k): float(v) for k, v in data.get("available_shares", account.broker.positions()).items()
+        }
         # Restore corporate actions from saved state
         if "corporate_actions" in data:
             account._corporate_actions = [
@@ -473,6 +522,7 @@ class SimAccount:
             "applied_ca_records": [r.to_dict() for r in self._applied_ca_records],
             "corporate_actions": [ca.to_dict() for ca in self._corporate_actions],
             "pending_orders": [o.to_dict() for o in self._pending_orders],
+            "available_shares": dict(self._available_shares),
             "paper_only": True,
         }
 
@@ -486,6 +536,9 @@ class SimAccount:
             "fill_price_rule": self.fill_price_rule,
             "missing_open_policy": self.missing_open_policy,
             "allow_zero_cost_for_tests": self.allow_zero_cost_for_tests,
+            "execution_adjustment": self.execution_adjustment,
+            "lot_size": self.lot_size,
+            "tick_size": self.tick_size,
             "order_routing": "none; all fills are local ledger simulations",
         }
 
@@ -514,3 +567,12 @@ def _assert_no_non_finite(value: Any, *, path: str) -> None:
         for i, item in enumerate(value):
             _assert_no_non_finite(item, path=f"{path}[{i}]")
         return
+
+
+def _aggregate_costs(fill_results: list[dict[str, Any]]) -> dict[str, float]:
+    return {
+        "total": float(sum(r.get("fee", 0.0) for r in fill_results)),
+        "commission": float(sum(r.get("commission", 0.0) for r in fill_results)),
+        "slippage": float(sum(r.get("slippage", 0.0) for r in fill_results)),
+        "stamp_duty": float(sum(r.get("stamp_duty", 0.0) for r in fill_results)),
+    }

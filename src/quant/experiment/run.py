@@ -27,6 +27,7 @@ from quant.data.pipeline import load_and_validate
 from quant.experiment.logger import get_run_logger
 from quant.experiment.metadata import build_metadata, hash_dataframe, hash_file, write_metadata
 from quant.risk.checks import RiskConfig
+from quant.signal import SignalConfig, generate_target_weights
 from quant.strategy import build_strategy
 from quant.utils.timeutils import make_run_id
 
@@ -118,8 +119,6 @@ def _run_equity_experiment(cfg: AppConfig, *, results_root: Path | None, now: da
     }
     _write_yaml(run_dir / "config_snapshot.yaml", snapshot)
     logger.info("loaded prices: %d rows x %d symbols", len(prices), prices.shape[1])
-    strategy = build_strategy(cfg.strategy.name, dict(cfg.strategy.params))
-    target_weights = strategy.generate_weights(prices)
     cost_model = BpsCostModel(
         cfg.costs.bps,
         cfg.costs.slippage_bps,
@@ -127,6 +126,14 @@ def _run_equity_experiment(cfg: AppConfig, *, results_root: Path | None, now: da
         allow_zero_cost_for_tests=cfg.costs.allow_zero_cost_for_tests,
     )
     risk = RiskConfig(cfg.risk.max_symbol_weight, cfg.risk.max_gross_leverage, cfg.risk.reject_nan)
+    target_weights = generate_target_weights(
+        prices,
+        SignalConfig(
+            strategy_name=cfg.strategy.name,
+            strategy_params=dict(cfg.strategy.params),
+            risk=risk,
+        ),
+    )
     result = run_backtest(
         prices=prices,
         target_weights=target_weights,

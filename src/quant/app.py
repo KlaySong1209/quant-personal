@@ -14,6 +14,11 @@ import pandas as pd
 import numpy as np
 
 from quant.config.loader import load_config
+from quant.artifacts import (
+    load_equity_curve as _load_equity_curve_artifact,
+    load_trades as _load_trades_artifact,
+    write_dataframe as _write_dataframe_artifact,
+)
 from quant.data.adjust.calendar import build_trading_calendar
 from quant.data.bundle import AdjustmentMeta, CalendarMeta
 from quant.data.bundle.catalog import BundleCatalog, CatalogError
@@ -33,6 +38,7 @@ from quant.execution.paper import PaperBroker
 from quant.experiment.run import RESULTS_ROOT, RunArtifacts, run_experiment
 from quant.portfolio.target import target_dollars_to_shares, weights_to_target_dollars
 from quant.risk.checks import RiskConfig, apply_risk_checks
+from quant.signal import SignalConfig, generate_target_weights
 from quant.strategy import build_strategy
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -250,8 +256,7 @@ def run_paper_session(
         if not np.isfinite(open_prices.to_numpy(dtype="float64")).all():
             raise ValueError("paper session open prices must be finite")
 
-    strategy = build_strategy("placeholder", {"mode": "equal_weight"})
-    weights = strategy.generate_weights(prices)
+    weights = generate_target_weights(prices, SignalConfig())
     state = Path(state_path)
     if state.exists():
         account = SimAccount.load(state)
@@ -337,8 +342,9 @@ def run_manual_quote_step(
             missing_open_policy=missing_open_policy,
             mode=mode,
         )
-    weights = build_strategy("placeholder", {"mode": "equal_weight"}).generate_weights(
-        pd.DataFrame([prices], index=[pd.Timestamp(as_of or pd.Timestamp.utcnow())])
+    weights = generate_target_weights(
+        pd.DataFrame([prices], index=[pd.Timestamp(as_of or pd.Timestamp.utcnow())]),
+        SignalConfig(),
     )
     ts = pd.Timestamp(as_of) if as_of else pd.Timestamp.utcnow()
     ts = ts.tz_localize("UTC") if ts.tzinfo is None else ts.tz_convert("UTC")
@@ -437,8 +443,9 @@ def run_bundle_quote_step(
             missing_open_policy=missing_open_policy,
             mode=mode,
         )
-    weights = build_strategy("placeholder", {"mode": "equal_weight"}).generate_weights(
-        pd.DataFrame([prices], index=[snapshot["timestamp"].max()])
+    weights = generate_target_weights(
+        pd.DataFrame([prices], index=[snapshot["timestamp"].max()]),
+        SignalConfig(),
     )
     ts = pd.Timestamp(as_of) if as_of else pd.Timestamp(snapshot["timestamp"].max())
     ts = ts.tz_localize("UTC") if ts.tzinfo is None else ts.tz_convert("UTC")
@@ -532,22 +539,15 @@ def load_run_summary(run_dir: str | Path) -> dict[str, Any]:
 
 
 def load_equity_curve(run_dir: str | Path) -> pd.DataFrame:
-    return pd.read_parquet(Path(run_dir) / "equity_curve.parquet")
+    return _load_equity_curve_artifact(run_dir)
 
 
 def load_trades(run_dir: str | Path) -> pd.DataFrame:
-    return pd.read_parquet(Path(run_dir) / "trades.parquet")
+    return _load_trades_artifact(run_dir)
 
 
 def _write_dataframe(df: pd.DataFrame, base_path: Path) -> Path:
-    parquet_path = base_path.with_suffix(".parquet")
-    try:
-        df.to_parquet(parquet_path, index=False)
-        return parquet_path
-    except Exception:
-        csv_path = base_path.with_suffix(".csv")
-        df.to_csv(csv_path, index=False)
-        return csv_path
+    return _write_dataframe_artifact(df, base_path)
 
 
 def format_metrics_plain(metrics: dict[str, float]) -> str:

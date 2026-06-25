@@ -22,6 +22,13 @@ class _Event:
     price: float
     cash_delta: float
     cash_after: float
+    status: str = "filled"
+    reason: str = ""
+    order_id: str = ""
+    fee: float = 0.0
+    commission: float = 0.0
+    slippage: float = 0.0
+    stamp_duty: float = 0.0
 
 
 class PaperBroker(BrokerAdapter):
@@ -111,7 +118,63 @@ class PaperBroker(BrokerAdapter):
         if fee == 0:
             return
         self._cash -= fee
-        self._events.append(_Event(pd.Timestamp(timestamp), label, 0.0, 0.0, -fee, self._cash))
+        self._events.append(
+            _Event(
+                pd.Timestamp(timestamp),
+                label,
+                0.0,
+                0.0,
+                -fee,
+                self._cash,
+                fee=fee,
+            )
+        )
+
+    def apply_execution_events(
+        self,
+        events: list[dict],
+        *,
+        last_prices: dict[str, float] | None = None,
+    ) -> None:
+        """Apply pre-validated local execution events to broker state."""
+        if last_prices:
+            self.update_prices(last_prices)
+        for event in events:
+            symbol = str(event["symbol"])
+            shares_delta = float(event["shares_delta"])
+            price = float(event["price"])
+            cash_delta = float(event["cash_delta"])
+            status = str(event.get("status", "filled"))
+            reason = str(event.get("reason", ""))
+            order_id = str(event.get("order_id", ""))
+            fee = float(event.get("fee", 0.0))
+            commission = float(event.get("commission", 0.0))
+            slippage = float(event.get("slippage", 0.0))
+            stamp_duty = float(event.get("stamp_duty", 0.0))
+            if status == "filled" and shares_delta != 0.0:
+                self._positions[symbol] = self._positions.get(symbol, 0.0) + shares_delta
+                if abs(self._positions[symbol]) <= 1e-12:
+                    self._positions.pop(symbol, None)
+                if price > 0:
+                    self._last_prices[symbol] = price
+            self._cash += cash_delta
+            self._events.append(
+                _Event(
+                    timestamp=pd.Timestamp(event["timestamp"]),
+                    symbol=symbol,
+                    shares_delta=shares_delta,
+                    price=price,
+                    cash_delta=cash_delta,
+                    cash_after=self._cash,
+                    status=status,
+                    reason=reason,
+                    order_id=order_id,
+                    fee=fee,
+                    commission=commission,
+                    slippage=slippage,
+                    stamp_duty=stamp_duty,
+                )
+            )
 
     def apply_cash_adjustment(
         self,
@@ -177,6 +240,13 @@ class PaperBroker(BrokerAdapter):
                     "price": event.price,
                     "cash_delta": event.cash_delta,
                     "cash_after": event.cash_after,
+                    "status": event.status,
+                    "reason": event.reason,
+                    "order_id": event.order_id,
+                    "fee": event.fee,
+                    "commission": event.commission,
+                    "slippage": event.slippage,
+                    "stamp_duty": event.stamp_duty,
                 }
                 for event in self._events
             ],
@@ -204,6 +274,13 @@ class PaperBroker(BrokerAdapter):
                 price=_finite_float(event["price"], "event price"),
                 cash_delta=_finite_float(event["cash_delta"], "event cash_delta"),
                 cash_after=_finite_float(event["cash_after"], "event cash_after"),
+                status=str(event.get("status", "filled")),
+                reason=str(event.get("reason", "")),
+                order_id=str(event.get("order_id", "")),
+                fee=_finite_float(event.get("fee", 0.0), "event fee"),
+                commission=_finite_float(event.get("commission", 0.0), "event commission"),
+                slippage=_finite_float(event.get("slippage", 0.0), "event slippage"),
+                stamp_duty=_finite_float(event.get("stamp_duty", 0.0), "event stamp_duty"),
             )
             for event in data.get("events", [])
         ]

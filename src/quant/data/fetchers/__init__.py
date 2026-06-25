@@ -15,10 +15,13 @@ from quant.data.fetchers.base import (
     FetchStatus,
     Fetcher,
 )
+from quant.data.fetchers.akshare_daily import AkshareFetcher, parse_akshare_bars
 
 __all__ = [
+    "AkshareFetcher",
     "FetchError",
     "FetchResult",
     "FetchStatus",
     "Fetcher",
+    "parse_akshare_bars",
 ]

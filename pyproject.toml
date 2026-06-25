@@ -28,6 +28,7 @@ dashboard = [
     "streamlit>=1.30",
 ]
 fetchers = [
+    "akshare>=1.10",
     "mootdx>=0.10",
 ]
 

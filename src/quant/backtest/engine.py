@@ -8,6 +8,7 @@ import numpy as np
 import pandas as pd
 
 from quant.backtest.costs import CostModel
+from quant.execution.account import SimAccount
 from quant.risk.checks import RiskConfig, apply_risk_checks
 
 
@@ -31,6 +32,18 @@ def _validate_inputs(prices: pd.DataFrame, target_weights: pd.DataFrame) -> None
         raise ValueError("prices contain NaN")
     if (prices <= 0).any().any():
         raise ValueError("prices must be strictly positive")
+
+
+def _validate_price_panel(panel: pd.DataFrame, prices: pd.DataFrame, *, name: str) -> pd.DataFrame:
+    if not panel.index.equals(prices.index):
+        raise ValueError(f"{name} index must match prices index")
+    if list(panel.columns) != list(prices.columns):
+        raise ValueError(f"{name} columns must match prices columns")
+    if panel.isna().any().any():
+        raise ValueError(f"{name} contains NaN")
+    if (panel <= 0).any().any():
+        raise ValueError(f"{name} must be strictly positive")
+    return panel.astype(float)
 
 
 def _validate_bool_panel(panel: pd.DataFrame, prices: pd.DataFrame, *, name: str) -> pd.DataFrame:
@@ -95,22 +108,47 @@ def _build_trades_long(
 def run_backtest(
     *,
     prices: pd.DataFrame,
+    open_prices: pd.DataFrame | None = None,
     target_weights: pd.DataFrame,
     cost_model: CostModel,
-    risk: RiskConfig,
+    risk: RiskConfig | None,
     initial_equity: float,
     tradable: pd.DataFrame | None = None,
     universe: pd.DataFrame | None = None,
+    fill_price_rule: str = "vectorized",
+    execution_adjustment: str = "none",
+    lot_size: int = 100,
+    tick_size: float = 0.01,
 ) -> BacktestResult:
     _validate_inputs(prices, target_weights)
     if initial_equity <= 0:
         raise ValueError("initial_equity must be positive")
+    if fill_price_rule not in {"vectorized", "same_day_close", "next_day_open"}:
+        raise ValueError("fill_price_rule must be 'vectorized', 'same_day_close', or 'next_day_open'")
     if tradable is not None:
         tradable = _validate_bool_panel(tradable, prices, name="tradable")
     if universe is not None:
         universe = _validate_bool_panel(universe, prices, name="universe")
+    if fill_price_rule in {"same_day_close", "next_day_open"}:
+        return _run_account_backtest(
+            prices=prices,
+            open_prices=open_prices,
+            target_weights=target_weights,
+            cost_model=cost_model,
+            risk=risk,
+            initial_equity=initial_equity,
+            tradable=tradable,
+            universe=universe,
+            fill_price_rule=fill_price_rule,
+            execution_adjustment=execution_adjustment,
+            lot_size=lot_size,
+            tick_size=tick_size,
+        )
 
-    checked_targets = apply_risk_checks(target_weights, risk)
+    if risk is None:
+        checked_targets = target_weights.astype(float)
+    else:
+        checked_targets = apply_risk_checks(target_weights, risk)
     weights_effective = checked_targets.shift(1).fillna(0.0)
     if tradable is not None:
         weights_effective = _apply_tradable_mask(weights_effective, tradable)
@@ -141,3 +179,87 @@ def run_backtest(
         initial_equity=float(initial_equity),
     )
 
+
+def _run_account_backtest(
+    *,
+    prices: pd.DataFrame,
+    open_prices: pd.DataFrame | None,
+    target_weights: pd.DataFrame,
+    cost_model: CostModel,
+    risk: RiskConfig | None,
+    initial_equity: float,
+    tradable: pd.DataFrame | None,
+    universe: pd.DataFrame | None,
+    fill_price_rule: str,
+    execution_adjustment: str,
+    lot_size: int,
+    tick_size: float,
+) -> BacktestResult:
+    open_panel = _validate_price_panel(open_prices if open_prices is not None else prices, prices, name="open_prices")
+    checked_targets = target_weights.astype(float) if risk is None else apply_risk_checks(target_weights, risk)
+    if universe is not None:
+        checked_targets = checked_targets.where(universe, 0.0)
+
+    account = SimAccount(
+        account_id="backtest-ledger",
+        starting_cash=initial_equity,
+        fill_price_rule=fill_price_rule,
+        allow_zero_cost_for_tests=True,
+        execution_adjustment=execution_adjustment,
+        lot_size=lot_size,
+        tick_size=tick_size,
+    )
+    account.cost_model = cost_model
+
+    for ts in prices.index:
+        can_trade = tradable.loc[ts].to_dict() if tradable is not None else None
+        account.step(
+            ts,
+            prices=prices.loc[ts].to_dict(),
+            open_prices=open_panel.loc[ts].to_dict() if fill_price_rule == "next_day_open" else None,
+            target_weights=checked_targets.loc[ts].to_dict(),
+            can_buy=can_trade,
+            can_sell=can_trade,
+        )
+
+    history = account.equity_history()
+    equity = pd.Series(history["equity"].astype(float).to_numpy(), index=prices.index, name="equity")
+    returns = equity.pct_change().fillna(0.0)
+    weights_effective = _weights_from_history(history, prices)
+    trades = account.broker.ledger()
+    costs = _costs_from_ledger(trades, prices.index)
+    return BacktestResult(
+        returns=returns,
+        weights_effective=weights_effective,
+        target_weights=checked_targets,
+        trades_long=trades,
+        costs=costs,
+        equity_curve=equity,
+        initial_equity=float(initial_equity),
+    )
+
+
+def _weights_from_history(history: pd.DataFrame, prices: pd.DataFrame) -> pd.DataFrame:
+    rows = []
+    for _, row in history.iterrows():
+        ts = pd.Timestamp(row["timestamp"])
+        if ts.tzinfo is None:
+            ts = ts.tz_localize("UTC")
+        else:
+            ts = ts.tz_convert("UTC")
+        equity = float(row["equity"])
+        positions = row.get("positions") or {}
+        values = {
+            sym: (float(positions.get(sym, 0.0)) * float(prices.loc[ts, sym]) / equity) if equity else 0.0
+            for sym in prices.columns
+        }
+        rows.append(values)
+    return pd.DataFrame(rows, index=prices.index, columns=prices.columns).fillna(0.0)
+
+
+def _costs_from_ledger(ledger: pd.DataFrame, index: pd.DatetimeIndex) -> pd.Series:
+    if ledger.empty or "fee" not in ledger.columns:
+        return pd.Series(0.0, index=index)
+    work = ledger.copy()
+    work["timestamp"] = pd.to_datetime(work["timestamp"], utc=True)
+    return work.groupby("timestamp")["fee"].sum().reindex(index, fill_value=0.0).astype(float)
