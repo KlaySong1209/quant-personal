@@ -25,7 +25,15 @@ _PROJECT = Path(__file__).resolve().parents[1]
 if str(_PROJECT) not in sys.path:
     sys.path.insert(0, str(_PROJECT))
 
-from quant.app import paper_account_status, format_metrics_plain, load_run_summary, list_runs  # noqa: E402
+from quant.app import (  # noqa: E402
+    create_bundle,
+    get_bundle_status,
+    list_bundles,
+    list_runs,
+    paper_account_status,
+    run_bundle_quote_step,
+    update_bundle,
+)
 from quant.report import account_report, backtest_report, combined_report  # noqa: E402
 
 
@@ -59,272 +67,121 @@ def _terminal_css() -> str:
     return """
 <style>
 :root {
-  --qp-ink: #20242a;
-  --qp-muted: #6d7580;
-  --qp-line: #d9dee5;
-  --qp-soft: #f6f7f9;
-  --qp-blue: #dcecf8;
-  --qp-blue-strong: #477da8;
-  --qp-red: #f2cfc4;
-  --qp-red-strong: #923f2e;
-  --qp-green: #dfeee4;
-  --qp-green-strong: #3e7653;
+  --qp-bg: #0b1016;
+  --qp-panel: #101821;
+  --qp-panel-2: #0f1720;
+  --qp-line: #233241;
+  --qp-green: #35d07f;
+  --qp-yellow: #f2c94c;
+  --qp-red: #ff6b6b;
+  --qp-blue: #56a8ff;
+  --qp-text: #e6edf3;
+  --qp-muted: #8b98a5;
 }
-.quant-terminal,
-.terminal-panel,
-.terminal-strip,
-.terminal-statusbar {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+.stApp {
+  background: radial-gradient(circle at top left, #13202d 0%, #0b1016 36%, #070b10 100%);
+  color: var(--qp-text);
 }
-.quant-terminal {
+.main .block-container {
+  padding-top: 2rem;
+  max-width: 1280px;
+}
+.qp-hero {
   border: 1px solid var(--qp-line);
-  border-radius: 8px;
-  background: #ffffff;
-  box-shadow: 0 8px 28px rgba(19, 31, 44, 0.08);
-  overflow: hidden;
+  border-radius: 14px;
+  background: linear-gradient(135deg, rgba(16,24,33,.96), rgba(10,16,23,.96));
+  padding: 22px 24px;
+  margin-bottom: 18px;
+  box-shadow: 0 18px 50px rgba(0,0,0,.28);
 }
-.terminal-topbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 14px 18px;
-  border-bottom: 1px solid var(--qp-line);
-  background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+.qp-kicker {
+  color: var(--qp-green);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+  letter-spacing: .18em;
+  text-transform: uppercase;
 }
-.terminal-brand {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  min-width: 0;
+.qp-title {
+  color: var(--qp-text);
+  font-size: 32px;
+  font-weight: 800;
+  line-height: 1.12;
+  margin: 8px 0 6px 0;
 }
-.terminal-logo {
-  width: 36px;
-  height: 36px;
-  border: 1px solid #bfc8d2;
-  border-radius: 50%;
+.qp-subtitle { color: var(--qp-muted); font-size: 14px; }
+.qp-grid {
   display: grid;
-  place-items: center;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+  margin: 14px 0 18px 0;
+}
+.qp-card {
+  border: 1px solid var(--qp-line);
+  border-radius: 14px;
+  background: rgba(16,24,33,.94);
+  padding: 18px;
+  min-height: 190px;
+  box-shadow: 0 12px 36px rgba(0,0,0,.22);
+}
+.qp-card-title {
+  color: var(--qp-text);
   font-size: 15px;
-  color: #2a313a;
-  background: #fbfcfd;
-}
-.terminal-kicker {
-  color: var(--qp-muted);
-  font-size: 10px;
-  letter-spacing: 0;
-  text-transform: uppercase;
-  line-height: 1.3;
-}
-.terminal-title {
-  color: var(--qp-ink);
-  font-size: 18px;
-  line-height: 1.15;
   font-weight: 800;
-  letter-spacing: 0;
-}
-.terminal-pills {
   display: flex;
   align-items: center;
   gap: 8px;
-  flex-wrap: wrap;
-  justify-content: flex-end;
+  margin-bottom: 12px;
 }
-.terminal-pill {
-  border: 1px solid var(--qp-line);
-  border-radius: 4px;
-  padding: 7px 10px;
-  background: #fff;
-  color: #313943;
-  font-size: 11px;
-  font-weight: 700;
-  white-space: nowrap;
+.qp-card-title span {
+  color: var(--qp-green);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 }
-.terminal-pill.blue {
-  background: var(--qp-blue);
-  border-color: #c6dced;
-  color: #315e7d;
-}
-.terminal-pill.red {
-  background: var(--qp-red);
-  border-color: #e3b3a5;
-  color: var(--qp-red-strong);
-}
-.terminal-panel {
-  border: 1px solid var(--qp-line);
-  border-radius: 8px;
-  background: #ffffff;
-  padding: 14px 16px;
-  min-height: 100%;
-}
-.terminal-panel.tight {
-  padding: 10px 12px;
-}
-.terminal-panel-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding-bottom: 9px;
-  margin-bottom: 10px;
-  border-bottom: 1px solid #e8ebef;
-}
-.terminal-panel-title {
-  color: #232a32;
-  font-size: 12px;
-  font-weight: 900;
-  letter-spacing: 0;
-  text-transform: uppercase;
-}
-.terminal-panel-note {
-  color: var(--qp-muted);
-  font-size: 10px;
-  text-transform: uppercase;
-}
-.metric-tile {
-  border: 1px solid #e0e5eb;
-  border-radius: 6px;
-  background: #fbfcfd;
-  padding: 12px 13px;
-  min-height: 96px;
-}
-.metric-tile.blue {
-  background: linear-gradient(180deg, #fbfdff 0%, #eef6fd 100%);
-}
-.metric-tile.red {
-  background: linear-gradient(180deg, #fffdfc 0%, #f9ebe6 100%);
-}
-.metric-label {
-  color: var(--qp-muted);
-  font-size: 10px;
+.qp-metric {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 26px;
+  color: var(--qp-green);
   font-weight: 800;
-  text-transform: uppercase;
-  margin-bottom: 8px;
+  margin: 6px 0;
 }
-.metric-value {
-  color: var(--qp-ink);
-  font-family: Georgia, "Times New Roman", serif;
-  font-size: clamp(24px, 2.6vw, 36px);
-  line-height: 1;
-  letter-spacing: 0;
-  white-space: nowrap;
-}
-.metric-detail {
-  color: var(--qp-muted);
-  font-size: 11px;
-  line-height: 1.35;
-  margin-top: 8px;
-}
-.terminal-mini-grid {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  border: 1px solid #e2e6eb;
-  border-radius: 6px;
-  overflow: hidden;
-}
-.terminal-mini-grid > div {
-  padding: 9px 10px;
-  border-right: 1px solid #e2e6eb;
-  background: #fbfcfd;
-}
-.terminal-mini-grid > div:last-child {
-  border-right: 0;
-}
-.mini-label {
-  color: var(--qp-muted);
-  font-size: 9px;
-  text-transform: uppercase;
-  font-weight: 800;
-}
-.mini-value {
-  color: var(--qp-blue-strong);
-  font-size: 13px;
-  font-weight: 900;
-  margin-top: 4px;
-}
-.terminal-list {
-  display: grid;
-  gap: 7px;
-  margin: 0;
-}
-.terminal-row {
+.qp-muted { color: var(--qp-muted); font-size: 13px; line-height: 1.5; }
+.qp-row {
   display: flex;
   justify-content: space-between;
-  gap: 10px;
+  border-bottom: 1px solid rgba(35,50,65,.7);
   padding: 7px 0;
-  border-bottom: 1px solid #edf0f3;
-  font-size: 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 13px;
 }
-.terminal-row:last-child {
-  border-bottom: 0;
-}
-.terminal-row span:first-child {
-  color: var(--qp-muted);
-}
-.terminal-row span:last-child {
-  color: var(--qp-ink);
-  font-weight: 800;
-  text-align: right;
-}
-.terminal-statusbar {
+.qp-row:last-child { border-bottom: 0; }
+.qp-row b { color: var(--qp-text); }
+.qp-status-ok { color: var(--qp-green); font-weight: 800; }
+.qp-status-warn { color: var(--qp-yellow); font-weight: 800; }
+.qp-status-bad { color: var(--qp-red); font-weight: 800; }
+.qp-terminal {
   border: 1px solid var(--qp-line);
-  border-radius: 6px;
-  background: #ffffff;
-  color: #59616b;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  padding: 8px 11px;
-  font-size: 10px;
-  text-transform: uppercase;
-  overflow-x: auto;
-}
-.terminal-alert {
-  border: 1px solid #e6c5bc;
-  background: #fff8f5;
-  color: var(--qp-red-strong);
-  border-radius: 6px;
-  padding: 10px 12px;
-  font-size: 12px;
-  font-weight: 800;
-}
-div[data-testid="stMetric"] {
-  border: 1px solid var(--qp-line);
-  border-radius: 6px;
-  padding: 10px 12px;
-  background: #ffffff;
+  border-radius: 12px;
+  background: #070b10;
+  padding: 14px 16px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  color: #b7c4d1;
+  margin-top: 12px;
 }
 .stButton > button {
-  border-radius: 5px;
-  border: 1px solid #bdc7d2;
-  background: #ffffff;
-  color: #222a33;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  border-radius: 8px;
+  border: 1px solid #2f465c;
+  background: linear-gradient(180deg, #172433, #101923);
+  color: #e6edf3;
   font-weight: 800;
+  min-height: 42px;
 }
-.stButton > button:hover {
-  border-color: var(--qp-blue-strong);
-  color: var(--qp-blue-strong);
+.stButton > button:hover { border-color: var(--qp-green); color: var(--qp-green); }
+div[data-testid="stTextInput"] input {
+  background: #080d13;
+  color: var(--qp-text);
+  border: 1px solid var(--qp-line);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 }
-@media (max-width: 760px) {
-  .terminal-topbar {
-    align-items: flex-start;
-    flex-direction: column;
-  }
-  .terminal-pills {
-    justify-content: flex-start;
-  }
-  .terminal-mini-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-  .terminal-mini-grid > div:nth-child(2) {
-    border-right: 0;
-  }
-  .metric-value {
-    font-size: 28px;
-  }
-}
+@media (max-width: 900px) { .qp-grid { grid-template-columns: 1fr; } }
 </style>
 """
 
@@ -492,10 +349,430 @@ def _render_status_report(report: dict[str, Any]) -> None:
         st.caption("No open positions.")
 
 
-def main() -> None:
-    st.sidebar.title("quant-personal")
-    st.sidebar.markdown("Local daily-frequency research tool.")
+# ---------------------------------------------------------------------------
+# Data page (bundle view) — Stage 2
+# ---------------------------------------------------------------------------
 
+
+_FRESHNESS_BADGE = {
+    "fresh":     ("🟢", "最新"),
+    "stale":     ("🟡", "需要更新"),
+    "no_data":   ("⚪", "还没有数据"),
+    "no_bundle": ("⚪", "还没有股票池"),
+    "error":     ("🔴", "数据异常"),
+}
+
+
+def _human_symbol(symbol: str) -> str:
+    names = {
+        "SH600519": "贵州茅台",
+        "SZ000001": "平安银行",
+        "SZ000002": "万科A",
+    }
+    return names.get(symbol, symbol)
+
+
+def _symbol_input_to_list(text: str) -> list[str]:
+    """Parse user-entered stock codes from comma/space/newline separated text."""
+    raw = text.replace("，", ",").replace("\n", ",").replace(" ", ",")
+    return [item.strip() for item in raw.split(",") if item.strip()]
+
+
+def _symbols_to_input(symbols: list[str]) -> str:
+    if not symbols:
+        return "600519, 000001, 000002"
+    # For readability let users see bare six-digit codes where possible.
+    out = []
+    for sym in symbols:
+        if sym.startswith(("SH", "SZ")) and len(sym) == 8:
+            out.append(sym[2:])
+        else:
+            out.append(sym)
+    return ", ".join(out)
+
+
+def _stock_pool_label(name: str | None) -> str:
+    if not name:
+        return "未选择股票池"
+    if name == "default":
+        return "默认股票池"
+    return str(name)
+
+
+def _coverage_text(date_range: dict[str, Any]) -> str:
+    if not date_range:
+        return "暂无数据"
+    first = date_range.get("first", "?")
+    last = date_range.get("last", "?")
+    return f"{first} 至 {last}"
+
+
+def _bundle_view_data(status: dict[str, Any]) -> dict[str, Any]:
+    """Shape a bundle status report (from ``app.get_bundle_status``) into a view model."""
+    manifest = status.get("manifest") or {}
+    icon, label = _FRESHNESS_BADGE.get(status.get("status", "error"), _FRESHNESS_BADGE["error"])
+    return {
+        "freshness_icon": icon,
+        "freshness_label": label,
+        "name": status.get("name"),
+        "error": status.get("error"),
+        "manifest": manifest,
+        "symbols": manifest.get("symbols") or [],
+        "date_range": manifest.get("date_range") or {},
+        "source_chain": manifest.get("source_chain") or [],
+        "adjustment": manifest.get("adjustment") or {},
+        "calendar": manifest.get("calendar") or {},
+        "row_count": manifest.get("row_count"),
+        "updated_at": manifest.get("updated_at"),
+        "recent_provenance": status.get("recent_provenance") or [],
+    }
+
+
+def _render_terminal_header() -> None:
+    st.markdown(
+        '<div class="qp-hero"><div class="qp-kicker">quant-personal</div>'
+        '<div class="qp-title">A股量化研究终端</div>'
+        '<div class="qp-subtitle">本地日频数据 · 模拟账户 · 不连接实盘</div></div>',
+        unsafe_allow_html=True,
+    )
+
+
+def _render_data_onboarding() -> None:
+    """Shown on the main operation page when no stock pool exists."""
+    _render_terminal_header()
+    st.markdown('<div class="qp-grid">', unsafe_allow_html=True)
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.markdown('<div class="qp-card-title"><span>01</span> 股票池</div>', unsafe_allow_html=True)
+        codes = st.text_input(
+            "输入股票代码",
+            value="600519, 000001, 000002",
+            help="用逗号分隔，支持 6 位数字或 SH600519 格式",
+        )
+        parsed = _symbol_input_to_list(codes)
+        st.caption(f"将创建 {len(parsed)} 只股票的默认股票池")
+        if st.button("创建股票池", type="primary"):
+            result = create_bundle("default", symbols=parsed)
+            if result.get("status") in {"ok", "already_exists"}:
+                st.success("股票池已准备好。下一步点击“更新今日数据”。")
+                st.rerun()
+            else:
+                st.error(f"创建失败：{result.get('error')}")
+    with col2:
+        st.markdown('<div class="qp-card-title"><span>02</span> 数据状态</div>', unsafe_allow_html=True)
+        st.markdown('<div class="qp-metric">未创建</div><div class="qp-muted">创建股票池后即可拉取最新日线数据。</div>', unsafe_allow_html=True)
+    with col3:
+        st.markdown('<div class="qp-card-title"><span>03</span> 模拟账户</div>', unsafe_allow_html=True)
+        st.markdown('<div class="qp-metric">未开始</div><div class="qp-muted">数据更新后，可以推进一次本地模拟账户。</div>', unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)
+    st.caption("说明：本页面只做本地模拟研究，不连接实盘账户，不下真实订单。")
+
+def _load_stock_pool_view(bundle_name: str | None) -> dict[str, Any] | None:
+    if not bundle_name:
+        return None
+    status = get_bundle_status(bundle_name)
+    if status.get("status") == "no_bundle":
+        return {"error": f"股票池 `{bundle_name}` 不存在，请刷新页面。"}
+    view = _bundle_view_data(status)
+    if view["error"]:
+        return {"error": f"数据异常：{view['error']}"}
+    return view
+
+
+def _render_data_page(bundle_name: str | None) -> None:
+    """Main operation page: user-facing, card dashboard, no internal jargon."""
+    if not bundle_name:
+        _render_data_onboarding()
+        return
+
+    view = _load_stock_pool_view(bundle_name)
+    if not view:
+        _render_data_onboarding()
+        return
+    if view.get("error"):
+        st.error(view["error"])
+        return
+
+    _render_terminal_header()
+    icon = view["freshness_icon"]
+    label = view["freshness_label"]
+    last_date = (view["date_range"] or {}).get("last", "暂无数据")
+
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.markdown('<div class="qp-card-title"><span>01</span> 股票池</div>', unsafe_allow_html=True)
+        codes = st.text_input(
+            "股票代码",
+            value=_symbols_to_input(view["symbols"]),
+            help="当前版本会使用已创建的股票池；如需换股，请先创建新的默认池（后续会做重置/多股票池管理）。",
+        )
+        rows = []
+        for sym in view["symbols"]:
+            rows.append(f'<div class="qp-row"><span>{_human_symbol(sym)}</span><b>{sym}</b></div>')
+        st.markdown(''.join(rows) if rows else '<div class="qp-muted">还没有股票</div>', unsafe_allow_html=True)
+
+    with col2:
+        status_class = "qp-status-ok" if label == "最新" else "qp-status-warn"
+        st.markdown('<div class="qp-card-title"><span>02</span> 数据状态</div>', unsafe_allow_html=True)
+        st.markdown(
+            f'<div class="qp-metric">{icon} {label}</div>'
+            f'<div class="qp-row"><span>最新交易日</span><b>{last_date}</b></div>'
+            f'<div class="qp-row"><span>覆盖范围</span><b>{_coverage_text(view["date_range"])}</b></div>'
+            f'<div class="qp-row"><span>股票数量</span><b>{len(view["symbols"])}</b></div>',
+            unsafe_allow_html=True,
+        )
+        _render_update_section(view["name"])
+
+    with col3:
+        st.markdown('<div class="qp-card-title"><span>03</span> 模拟账户</div>', unsafe_allow_html=True)
+        acct = paper_account_status()
+        eq = acct.get("final_equity")
+        if eq is None:
+            st.markdown('<div class="qp-metric">未开始</div><div class="qp-muted">更新数据后，点击下方按钮推进本地模拟账户。</div>', unsafe_allow_html=True)
+        else:
+            st.markdown(
+                f'<div class="qp-metric">¥{float(eq):,.2f}</div>'
+                f'<div class="qp-row"><span>步数</span><b>{acct.get("steps") or 0}</b></div>'
+                f'<div class="qp-row"><span>现金</span><b>¥{float(acct.get("final_cash") or 0):,.2f}</b></div>',
+                unsafe_allow_html=True,
+            )
+        _render_advance_section(view["name"])
+
+    st.markdown(
+        '<div class="qp-terminal">'
+        '操作顺序：1 输入/确认股票池 → 2 更新今日数据 → 3 推进模拟账户。'
+        '<br>所有操作只写入本地文件，不连接实盘，不下真实订单。'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+
+def _render_data_detail_page(bundle_name: str | None) -> None:
+    """Advanced data details for debugging — bundle/manifest/provenance live here."""
+    if not bundle_name:
+        _render_data_onboarding()
+        return
+    view = _load_stock_pool_view(bundle_name)
+    if not view:
+        _render_data_onboarding()
+        return
+    if view.get("error"):
+        st.error(view["error"])
+        return
+
+    st.title("数据详情（高级）")
+    st.caption("这里保留工程细节，用于排查数据问题。日常操作请使用“今日操作”。")
+
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.metric("Bundle", view["name"])
+    with col2:
+        st.metric("Freshness", f"{view['freshness_icon']} {view['freshness_label']}")
+    with col3:
+        rc = view["row_count"]
+        st.metric("Rows", f"{rc:,}" if isinstance(rc, int) else "N/A")
+    with col4:
+        st.metric("Sources", " → ".join(view["source_chain"]) if view["source_chain"] else "N/A")
+
+    st.markdown("---")
+    st.subheader("Symbols")
+    st.dataframe({"Canonical code": view["symbols"]}, use_container_width=True, hide_index=True)
+
+    st.markdown("---")
+    col_a, col_b = st.columns(2)
+    with col_a:
+        st.markdown("**Adjustment**")
+        st.write(view["adjustment"])
+    with col_b:
+        st.markdown("**Calendar**")
+        st.write(view["calendar"])
+    if view["updated_at"]:
+        st.caption(f"Manifest last updated: {view['updated_at']}")
+
+    st.markdown("---")
+    st.subheader("Recent operations / provenance")
+    prov = view["recent_provenance"]
+    if not prov:
+        st.caption("No recorded operations yet.")
+    else:
+        rows = []
+        for r in prov:
+            rows.append({
+                "Time":   r.get("ts", ""),
+                "Op":     r.get("op", ""),
+                "Status": r.get("status", ""),
+                "Source": r.get("source", ""),
+                "Rows":   r.get("rows", ""),
+                "Error":  r.get("error", "") or "",
+            })
+        st.dataframe(rows, use_container_width=True, hide_index=True)
+
+
+_UPDATE_STATE_KEY = "_qp_last_update_result"
+
+
+def _render_update_section(bundle_name: str) -> None:
+    """Render the data-update button and the last result (across reruns)."""
+    last = st.session_state.get(_UPDATE_STATE_KEY)
+
+    cols = st.columns([1, 4])
+    with cols[0]:
+        clicked = st.button("更新今日数据", type="primary", key=f"update_btn_{bundle_name}")
+    with cols[1]:
+        st.caption(
+            "从通达信行情源拉取当前股票池的最新日线数据，并保存到本地。"
+        )
+
+    if clicked:
+        with st.spinner("正在更新行情数据…"):
+            try:
+                result = update_bundle(bundle_name)
+            except Exception as exc:  # noqa: BLE001 — surface the cause to the user
+                result = {
+                    "status": "failed",
+                    "bundle": bundle_name,
+                    "error": f"{type(exc).__name__}: {exc}",
+                    "rows_added": 0, "rows_skipped": 0, "rows_conflicting": 0,
+                    "symbols_ok": [], "symbols_failed": {},
+                    "new_last_date": None, "raw_paths": [],
+                }
+        st.session_state[_UPDATE_STATE_KEY] = result
+        st.rerun()
+
+    if last and last.get("bundle") == bundle_name:
+        _render_update_result(last)
+
+
+def _render_update_result(result: dict[str, Any]) -> None:
+    status = result.get("status")
+    if status == "ok":
+        added = result.get("rows_added", 0)
+        skipped = result.get("rows_skipped", 0)
+        last_date = result.get("new_last_date") or "未变化"
+        if added:
+            st.success(f"数据更新完成：新增 {added} 行，最新交易日 {last_date}。")
+        else:
+            st.info(f"数据已经是最新：没有新增行，已匹配 {skipped} 行。")
+    elif status == "partial":
+        st.warning(
+            f"部分更新成功：新增 {result.get('rows_added', 0)} 行，"
+            f"有 {len(result.get('symbols_failed') or {})} 只股票失败。"
+        )
+    elif status == "no_bundle":
+        st.error(result.get("error") or "没有找到股票池。")
+    else:
+        st.error(f"更新失败：{result.get('error') or status}")
+
+    failed = result.get("symbols_failed") or {}
+    if failed:
+        st.markdown("**失败股票：**")
+        st.dataframe(
+            [{"股票代码": k, "原因": v} for k, v in failed.items()],
+            use_container_width=True, hide_index=True,
+        )
+
+
+_ADVANCE_STATE_KEY = "_qp_last_advance_result"
+
+
+def _render_advance_section(bundle_name: str) -> None:
+    """Render the bundle-backed account advance button and last result."""
+    last = st.session_state.get(_ADVANCE_STATE_KEY)
+
+    cols = st.columns([1, 4])
+    with cols[0]:
+        clicked = st.button("推进模拟账户", key=f"advance_btn_{bundle_name}")
+    with cols[1]:
+        st.caption(
+            "使用最新收盘价，按当前策略推进一次本地模拟账户。不会下真实订单。"
+        )
+
+    if clicked:
+        with st.spinner("正在推进模拟账户…"):
+            try:
+                result = run_bundle_quote_step(bundle_name=bundle_name)
+                result = {"status": "ok", **result}
+            except Exception as exc:  # noqa: BLE001 — surface the cause to the user
+                result = {
+                    "status": "failed",
+                    "bundle_name": bundle_name,
+                    "error": f"{type(exc).__name__}: {exc}",
+                }
+        st.session_state[_ADVANCE_STATE_KEY] = result
+        st.rerun()
+
+    if last and last.get("bundle_name") == bundle_name:
+        _render_advance_result(last)
+
+
+def _render_advance_result(result: dict[str, Any]) -> None:
+    if result.get("status") == "ok":
+        equity = result.get("final_equity", 0)
+        advanced_to = result.get("advanced_to") or "未知日期"
+        st.success(
+            f"模拟账户已推进到 {advanced_to}。当前权益 {equity:,.2f}，"
+            f"账本平衡：{result.get('ledger_balanced')}。"
+        )
+    else:
+        st.error(f"推进失败：{result.get('error')}")
+
+
+# ---------------------------------------------------------------------------
+# Sidebar helpers
+# ---------------------------------------------------------------------------
+
+
+def _render_bundle_sidebar(bundles: list[dict[str, Any]]) -> str | None:
+    """Render the stock-pool selector and return the chosen bundle name."""
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("股票池")
+    if not bundles:
+        st.sidebar.caption("还没有股票池")
+        return None
+
+    names = [b["name"] for b in bundles]
+    labels = {_stock_pool_label(n): n for n in names}
+    selected_label = st.sidebar.selectbox(
+        "选择股票池",
+        list(labels.keys()),
+        label_visibility="collapsed",
+    )
+    selected = labels[selected_label]
+    chosen = next((b for b in bundles if b["name"] == selected), bundles[0])
+    icon, label = _FRESHNESS_BADGE.get(chosen.get("freshness_status", "error"),
+                                       _FRESHNESS_BADGE["error"])
+    st.sidebar.caption(f"{icon} {label}")
+    dr = chosen.get("date_range") or {}
+    if dr:
+        st.sidebar.caption(f"数据：{dr.get('first', '?')} 至 {dr.get('last', '?')}")
+    return selected
+
+
+def main() -> None:
+    st.markdown(_terminal_css(), unsafe_allow_html=True)
+    st.sidebar.title("quant-personal")
+    st.sidebar.markdown("本地日频量化研究工具")
+
+    page = st.sidebar.radio(
+        "页面",
+        ["今日操作", "模拟账户", "数据详情（高级）"],
+        label_visibility="collapsed",
+    )
+
+    bundles = list_bundles()
+    selected_bundle = _render_bundle_sidebar(bundles)
+
+    if page == "今日操作":
+        _render_data_page(selected_bundle)
+        return
+    if page == "数据详情（高级）":
+        _render_data_detail_page(selected_bundle)
+        return
+
+    _render_account_page()
+
+
+def _render_account_page() -> None:
+    """The original Account view; unchanged behavior."""
     # --- Account Status ---
     status = paper_account_status()
 

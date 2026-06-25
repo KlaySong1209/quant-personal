@@ -11,5 +11,10 @@ results/*
 logs/*
 !logs/.gitkeep
 data/example/*.csv
+data/raw/
+data/processed/
+data/bundles/
+data/daily/
+state/accounts/
 *.egg-info/
 .DS_Store

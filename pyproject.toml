@@ -17,6 +17,7 @@ dependencies = [
     "pydantic>=2.0",
     "pyyaml>=6.0",
     "matplotlib>=3.7",
+    "jsonschema>=4.0",
 ]
 
 [project.optional-dependencies]
@@ -26,14 +27,23 @@ dev = [
 dashboard = [
     "streamlit>=1.30",
 ]
+fetchers = [
+    "mootdx>=0.10",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]
 include = ["quant*"]
 
+[tool.setuptools.package-data]
+"quant.data.bundle" = ["manifest.schema.json"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-ra -q"
+addopts = "-ra -q -m 'not network'"
+markers = [
+    "network: integration tests that require external network (e.g. mootdx TCP to TDX servers; mainland-CN IP). Skipped by default; opt in with: pytest -m network",
+]
 filterwarnings = [
     "error::DeprecationWarning",
 ]

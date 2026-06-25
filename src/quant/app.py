@@ -15,9 +15,18 @@ import numpy as np
 
 from quant.config.loader import load_config
 from quant.data.adjust.calendar import build_trading_calendar
+from quant.data.bundle import AdjustmentMeta, CalendarMeta
+from quant.data.bundle.catalog import BundleCatalog, CatalogError
+from quant.data.bundle.migrate import (
+    DEFAULT_BUNDLES_ROOT,
+    DEFAULT_PROCESSED_DIR,
+    auto_migrate_if_needed,
+)
+from quant.data.bundle.provenance import ProvenanceRecord
+from quant.data.bundle.store import BundleError, BundleStore
 from quant.data.local import ingest_local_file, load_column_mapping, read_processed_ohlcv, write_synthetic_local_export
 from quant.data.pipeline import build_source, load_and_validate, to_close_panel
-from quant.data.quotes import ManualQuoteSource
+from quant.data.quotes import BundleQuoteSource, ManualQuoteSource
 from quant.data.validate import validate_ohlcv
 from quant.execution.account import SimAccount, AccountMode, MissingOpenPolicy
 from quant.execution.paper import PaperBroker
@@ -360,6 +369,107 @@ def run_manual_quote_step(
     }
 
 
+def bundle_account_state_path(bundle_name: str) -> Path:
+    """Return the default simulated account path for *bundle_name*.
+
+    We keep bundle accounts separate from the legacy ``state/paper_account.json``
+    so trying new bundles never mutates the old manual/paper session state.
+    """
+    safe = "".join(ch if ch.isalnum() or ch in {"-", "_"} else "_" for ch in bundle_name)
+    return PROJECT_ROOT / "state" / "accounts" / f"{safe}.json"
+
+
+def run_bundle_quote_step(
+    *,
+    bundle_name: str = "default",
+    symbols: list[str] | None = None,
+    bundles_root: Path = DEFAULT_BUNDLES_ROOT,
+    state_path: str | Path | None = None,
+    output_dir: str | Path | None = None,
+    starting_cash: float = 100000.0,
+    as_of: str | None = None,
+    commission_bps: float = 1.0,
+    stamp_duty_bps: float = 5.0,
+    slippage_bps: float = 1.0,
+    fill_price_rule: str = "same_day_close",
+    missing_open_policy: str = "skip",
+    mode: str = "paper_simulation",
+    production_data: bool = False,
+) -> dict[str, Any]:
+    """Advance a paper account one day using the latest row from a bundle.
+
+    This is the bundle-backed equivalent of :func:`run_manual_quote_step`.
+    It does not fetch; it only consumes whatever is already in the bundle.
+    Call :func:`update_bundle` first to refresh data.
+    """
+    if production_data and mode == "demo":
+        raise ValueError("demo mode is forbidden when production_data is true")
+
+    catalog = BundleCatalog.load(bundles_root)
+    entry = catalog.get(bundle_name)
+    if entry is None:
+        raise ValueError(f"unknown bundle: {bundle_name!r}")
+    store = BundleStore(bundles_root / entry.path)
+    manifest = store.manifest()
+    requested_symbols = symbols or list(manifest.symbols)
+
+    if state_path is None:
+        state_path = bundle_account_state_path(bundle_name)
+    if output_dir is None:
+        output_dir = PROJECT_ROOT / "results" / "paper_session" / bundle_name
+
+    quotes = BundleQuoteSource(store.layout.root)
+    snapshot = quotes.snapshot(requested_symbols, as_of=as_of)
+    prices = {str(row["symbol"]): float(row["close"]) for _, row in snapshot.iterrows()}
+    open_prices = {str(row["symbol"]): float(row["open"]) for _, row in snapshot.iterrows()}
+
+    state = Path(state_path)
+    if state.exists():
+        account = SimAccount.load(state)
+    else:
+        account = SimAccount(
+            account_id=f"bundle-{bundle_name}",
+            starting_cash=starting_cash,
+            commission_bps=commission_bps,
+            stamp_duty_bps=stamp_duty_bps,
+            slippage_bps=slippage_bps,
+            fill_price_rule=fill_price_rule,
+            missing_open_policy=missing_open_policy,
+            mode=mode,
+        )
+    weights = build_strategy("placeholder", {"mode": "equal_weight"}).generate_weights(
+        pd.DataFrame([prices], index=[snapshot["timestamp"].max()])
+    )
+    ts = pd.Timestamp(as_of) if as_of else pd.Timestamp(snapshot["timestamp"].max())
+    ts = ts.tz_localize("UTC") if ts.tzinfo is None else ts.tz_convert("UTC")
+    account.step(
+        ts,
+        prices=prices,
+        open_prices=open_prices if fill_price_rule == "next_day_open" else None,
+        target_weights=weights.iloc[0].to_dict(),
+        save_path=state,
+    )
+    out = Path(output_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    history = account.equity_history()
+    equity_history_path = _write_dataframe(history, out / "equity_history")
+    ledger_path = _write_dataframe(account.broker.ledger(), out / "ledger")
+    last = history.iloc[-1]
+    return {
+        "label": account.to_dict()["label"],
+        "bundle_name": bundle_name,
+        "assumptions": account.assumptions(),
+        "state_path": state,
+        "equity_history_path": equity_history_path,
+        "ledger_path": ledger_path,
+        "steps": int(len(history)),
+        "advanced_to": ts.isoformat(),
+        "final_cash": float(last["cash"]),
+        "final_equity": float(last["equity"]),
+        "positions": account.broker.positions(),
+        "ledger_balanced": account.broker.is_balanced(),
+    }
+
 def format_paper_demo_plain(summary: dict[str, Any]) -> str:
     return "\n".join(
         [
@@ -530,6 +640,315 @@ def dashboard_status() -> str:
     if importlib.util.find_spec("streamlit") is None:
         return f"Streamlit is not installed. Install it with: {STREAMLIT_INSTALL_COMMAND}"
     return "Streamlit is installed. Run: streamlit run dashboard/app_streamlit.py"
+
+
+# ---------------------------------------------------------------------------
+# Bundle view models (dashboard consumes ONLY these — never BundleStore directly)
+# ---------------------------------------------------------------------------
+
+
+def _ensure_bundle_migration() -> None:
+    """Idempotent guard: materialise a default bundle from legacy processed files.
+
+    Called at the top of every bundle view function so the dashboard never has
+    to think about migration. Cheap when already-migrated (catalog.json lookup).
+    """
+    try:
+        auto_migrate_if_needed(
+            bundles_root=DEFAULT_BUNDLES_ROOT,
+            processed_dir=DEFAULT_PROCESSED_DIR,
+        )
+    except Exception:
+        # Migration failure should not crash the dashboard. Surface via
+        # get_bundle_status() when the user explicitly inspects a bundle.
+        pass
+
+
+def list_bundles(*, bundles_root: Path = DEFAULT_BUNDLES_ROOT) -> list[dict[str, Any]]:
+    """Return a list of bundle summaries for the sidebar selector.
+
+    Each entry: ``{name, symbols, date_range, freshness_status, source_chain}``.
+    Empty list when no bundles exist. Never raises — dashboard renders an
+    onboarding hint instead.
+    """
+    _ensure_bundle_migration()
+    if not bundles_root.exists():
+        return []
+    catalog = BundleCatalog.load(bundles_root)
+    out: list[dict[str, Any]] = []
+    for entry in catalog:
+        store = BundleStore(bundles_root / entry.path)
+        if not store.exists():
+            continue
+        try:
+            m = store.manifest()
+        except Exception as exc:
+            out.append({
+                "name": entry.name,
+                "symbols": [],
+                "date_range": None,
+                "freshness_status": "error",
+                "source_chain": [],
+                "error": str(exc),
+            })
+            continue
+        out.append({
+            "name": m.name,
+            "symbols": list(m.symbols),
+            "date_range": {
+                "first": m.date_range.first,
+                "last": m.date_range.last,
+            },
+            "freshness_status": m.freshness.status,
+            "source_chain": list(m.source_chain),
+        })
+    return out
+
+
+def get_bundle_status(
+    name: str,
+    *,
+    bundles_root: Path = DEFAULT_BUNDLES_ROOT,
+) -> dict[str, Any]:
+    """Return a full dashboard view model for one bundle.
+
+    Status types:
+      - ``no_bundle``        : bundle name is not registered
+      - ``error``            : registered but manifest unreadable
+      - ``fresh|stale|no_data``: from FreshnessMeta
+
+    Dashboard MUST only render this view model; it must not guess state.
+    """
+    _ensure_bundle_migration()
+    catalog = BundleCatalog.load(bundles_root)
+    entry = catalog.get(name)
+    if entry is None:
+        return {
+            "status": "no_bundle",
+            "name": name,
+            "error": None,
+            "manifest": None,
+            "recent_provenance": [],
+        }
+    store = BundleStore(bundles_root / entry.path)
+    try:
+        m = store.manifest()
+    except Exception as exc:
+        return {
+            "status": "error",
+            "name": name,
+            "error": str(exc),
+            "manifest": None,
+            "recent_provenance": [],
+        }
+
+    # Recompute freshness lazily so the dashboard never shows yesterday's verdict.
+    try:
+        m = store.refresh_freshness()
+    except Exception:
+        pass
+
+    try:
+        recent = store.provenance.tail(10)
+    except Exception:
+        recent = []
+
+    return {
+        "status": m.freshness.status,
+        "name": m.name,
+        "error": None,
+        "manifest": m.to_dict(),
+        "recent_provenance": recent,
+    }
+
+
+DEFAULT_RAW_ROOT = PROJECT_ROOT / "data" / "raw"
+
+
+def create_bundle(
+    name: str,
+    *,
+    symbols: list[str],
+    bundles_root: Path = DEFAULT_BUNDLES_ROOT,
+) -> dict[str, Any]:
+    """Create an empty bundle named *name* with the declared *symbols*.
+
+    The bundle starts with zero OHLCV rows; populate it via :func:`update_bundle`
+    (mootdx) or via the legacy ``--ingest-local-data`` flow.
+
+    Returns a view model: ``{status, name, error, manifest}``.
+    """
+    _ensure_bundle_migration()
+    catalog = BundleCatalog.load(bundles_root)
+    if catalog.get(name) is not None:
+        return {
+            "status": "already_exists",
+            "name": name,
+            "error": f"bundle {name!r} already exists",
+            "manifest": None,
+        }
+    from quant.data.symbols import normalize_many, SymbolError
+    try:
+        canonical = normalize_many(symbols)
+    except SymbolError as exc:
+        return {
+            "status": "failed",
+            "name": name,
+            "error": f"symbol error: {exc}",
+            "manifest": None,
+        }
+
+    import pandas as pd
+    empty = pd.DataFrame(columns=["timestamp", "symbol", "open", "high", "low", "close", "volume"])
+    empty["timestamp"] = pd.to_datetime(empty["timestamp"], utc=True)
+    try:
+        store = BundleStore.create(
+            bundles_root / name,
+            name=name,
+            symbols=canonical,
+            ohlcv=empty,
+            source="empty",
+            adjustment=AdjustmentMeta(convention="none", method="raw_unadjusted"),
+            calendar=CalendarMeta(source="mootdx", exchange="SSE_SZSE"),
+        )
+    except BundleError as exc:
+        return {
+            "status": "failed",
+            "name": name,
+            "error": str(exc),
+            "manifest": None,
+        }
+    catalog.register(name=name)
+    return {
+        "status": "ok",
+        "name": name,
+        "error": None,
+        "manifest": store.manifest().to_dict(),
+    }
+
+
+def update_bundle(
+    name: str,
+    *,
+    bundles_root: Path = DEFAULT_BUNDLES_ROOT,
+    raw_root: Path = DEFAULT_RAW_ROOT,
+    fetcher: Any = None,
+    ingestor: Any = None,
+) -> dict[str, Any]:
+    """Pull fresh data into bundle *name* and merge it.
+
+    Default behavior: use :class:`MootdxFetcher` + :class:`MootdxIngestor`.
+    Tests inject ``fetcher`` / ``ingestor`` stubs.
+
+    Returns a dashboard-ready view model with keys:
+      ``status``           : "ok" | "partial" | "failed" | "no_bundle"
+      ``bundle``           : bundle name
+      ``rows_added``       : int (always present; 0 on failure)
+      ``rows_skipped``     : int
+      ``rows_conflicting`` : int
+      ``symbols_ok``       : list[str]
+      ``symbols_failed``   : dict[str, str]
+      ``new_last_date``    : str | None
+      ``error``            : str | None
+      ``raw_paths``        : list[str]  (informational; for provenance UI)
+    """
+    _ensure_bundle_migration()
+    catalog = BundleCatalog.load(bundles_root)
+    entry = catalog.get(name)
+    if entry is None:
+        return {
+            "status": "no_bundle",
+            "bundle": name,
+            "error": f"bundle {name!r} is not registered",
+            "rows_added": 0, "rows_skipped": 0, "rows_conflicting": 0,
+            "symbols_ok": [], "symbols_failed": {},
+            "new_last_date": None, "raw_paths": [],
+        }
+    store = BundleStore(bundles_root / entry.path)
+    manifest = store.manifest()
+
+    # Lazy import: keep mootdx out of the import graph until a user actually
+    # asks to fetch. Dashboard / list_bundles / get_bundle_status all work
+    # without the mootdx dependency.
+    if fetcher is None:
+        from quant.data.fetchers.mootdx_daily import MootdxFetcher
+        fetcher = MootdxFetcher()
+    if ingestor is None:
+        from quant.data.ingestors import MootdxIngestor
+        ingestor = MootdxIngestor(source=fetcher.source)
+
+    # 1. Fetch
+    try:
+        fetch_result = fetcher.fetch_daily_ohlcv(
+            list(manifest.symbols),
+            raw_dir=raw_root / fetcher.source,
+        )
+    except Exception as exc:  # noqa: BLE001
+        store.record(ProvenanceRecord(
+            op="fetch", status="failed",
+            source=getattr(fetcher, "source", "unknown"),
+            bundle=name, error=f"{type(exc).__name__}: {exc}",
+        ))
+        return {
+            "status": "failed",
+            "bundle": name,
+            "error": f"fetch failed: {exc}",
+            "rows_added": 0, "rows_skipped": 0, "rows_conflicting": 0,
+            "symbols_ok": [], "symbols_failed": {},
+            "new_last_date": None, "raw_paths": [],
+        }
+
+    # Record fetch outcome.
+    store.record(ProvenanceRecord(
+        op="fetch",
+        status=fetch_result.status,
+        source=fetch_result.source,
+        bundle=name,
+        symbols=fetch_result.symbols_ok,
+        rows=fetch_result.rows_total,
+        error=fetch_result.error,
+        details={
+            "raw_paths": [str(p) for p in fetch_result.raw_paths],
+            "route": fetch_result.route_note,
+            "failed": fetch_result.symbols_failed or None,
+        },
+    ))
+
+    if fetch_result.status == "failed" or not fetch_result.raw_paths:
+        return {
+            "status": "failed" if fetch_result.status == "failed" else "ok",
+            "bundle": name,
+            "error": fetch_result.error,
+            "rows_added": 0, "rows_skipped": 0, "rows_conflicting": 0,
+            "symbols_ok": fetch_result.symbols_ok,
+            "symbols_failed": fetch_result.symbols_failed,
+            "new_last_date": None,
+            "raw_paths": [str(p) for p in fetch_result.raw_paths],
+        }
+
+    # 2. Ingest
+    ingest_result = ingestor.ingest_into_bundle(
+        fetch_result.raw_paths,
+        bundle_root=bundles_root / entry.path,
+    )
+
+    overall = (
+        "failed" if ingest_result.status == "failed"
+        else "partial" if fetch_result.status == "partial"
+        else "ok"
+    )
+    return {
+        "status": overall,
+        "bundle": name,
+        "error": ingest_result.error,
+        "rows_added": ingest_result.rows_added,
+        "rows_skipped": ingest_result.rows_skipped,
+        "rows_conflicting": ingest_result.rows_conflicting,
+        "symbols_ok": fetch_result.symbols_ok,
+        "symbols_failed": fetch_result.symbols_failed,
+        "new_last_date": ingest_result.new_last_date,
+        "raw_paths": [str(p) for p in fetch_result.raw_paths],
+    }
 
 
 def launch_dashboard() -> int:

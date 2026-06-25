@@ -96,8 +96,8 @@ class TestAppAndEndToEnd(unittest.TestCase):
         import dashboard.app_streamlit as dashboard_app
 
         css = dashboard_app._terminal_css()
-        self.assertIn("quant-terminal", css)
-        self.assertIn("terminal-panel", css)
+        self.assertIn("qp-card", css)
+        self.assertIn("qp-terminal", css)
         self.assertIn("SIMULATED / PAPER -- NOT REAL", dashboard_app.PAPER_MODE_LABEL)
 
         snapshot = dashboard_app._paper_snapshot(

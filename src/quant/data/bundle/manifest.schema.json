@@ -1,0 +1,113 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://quant-personal.local/schemas/bundle-manifest-1.0.json",
+  "title": "BundleManifest",
+  "description": "Metadata for a single data bundle. One file per bundle at data/bundles/<name>/manifest.json.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "name",
+    "schema_version",
+    "market",
+    "created_at",
+    "updated_at",
+    "symbols",
+    "date_range",
+    "source_chain",
+    "adjustment",
+    "row_count",
+    "calendar",
+    "freshness"
+  ],
+  "properties": {
+    "name": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9_-]{0,62}[a-z0-9]$",
+      "description": "Bundle name, also the directory name under data/bundles/."
+    },
+    "schema_version": {
+      "type": "string",
+      "const": "1.0"
+    },
+    "market": {
+      "type": "string",
+      "enum": ["a_share_cn"],
+      "description": "Market this bundle belongs to. Reserved for future multi-market support; only 'a_share_cn' is supported in this version."
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "symbols": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^(SH|SZ|SYNTH)[A-Z0-9]+$"
+      },
+      "minItems": 1,
+      "uniqueItems": true,
+      "description": "Canonical symbols (SH600519, SZ000001, SYNTHAAA, ...)."
+    },
+    "date_range": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["first", "last"],
+      "properties": {
+        "first": {"type": "string", "format": "date"},
+        "last":  {"type": "string", "format": "date"}
+      }
+    },
+    "source_chain": {
+      "type": "array",
+      "items": {"type": "string"},
+      "minItems": 1,
+      "description": "Source labels in priority order, e.g. ['mootdx', 'manual-resset']."
+    },
+    "adjustment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["convention", "method"],
+      "properties": {
+        "convention": {"type": "string", "enum": ["forward", "backward", "none"]},
+        "method": {
+          "type": "string",
+          "enum": [
+            "provided_adjusted_close",
+            "provided_adjustment_factor",
+            "built_from_dividends_splits",
+            "raw_unadjusted",
+            "mootdx_qfq",
+            "mootdx_hfq"
+          ]
+        }
+      }
+    },
+    "row_count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "calendar": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source", "exchange"],
+      "properties": {
+        "source": {"type": "string", "enum": ["synthetic", "file", "mootdx"]},
+        "exchange": {"type": "string"}
+      }
+    },
+    "freshness": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["expected_through", "actual_through", "status"],
+      "properties": {
+        "expected_through": {"type": "string", "format": "date"},
+        "actual_through": {"type": "string", "format": "date"},
+        "status": {"type": "string", "enum": ["fresh", "stale", "no_data"]}
+      }
+    }
+  }
+}

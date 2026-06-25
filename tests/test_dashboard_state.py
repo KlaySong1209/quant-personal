@@ -177,5 +177,102 @@ class TestDashboardImport(unittest.TestCase):
         self.assertEqual(view_data["pending_orders"][0]["status"], "pending")
 
 
+class TestBundleViewModel(unittest.TestCase):
+    """Dashboard Data page consumes only the view model from
+    ``_bundle_view_data``; no Streamlit calls required to test it."""
+
+    def test_no_bundle_status_shapes_to_empty_view(self):
+        from dashboard import app_streamlit as dashboard
+        view = dashboard._bundle_view_data({
+            "status": "no_bundle",
+            "name": "default",
+            "error": None,
+            "manifest": None,
+            "recent_provenance": [],
+        })
+        self.assertEqual(view["freshness_icon"], "⚪")
+        self.assertEqual(view["freshness_label"], "还没有股票池")
+        self.assertEqual(view["symbols"], [])
+        self.assertEqual(view["source_chain"], [])
+        self.assertEqual(view["recent_provenance"], [])
+
+    def test_fresh_bundle_view_extracts_manifest_fields(self):
+        from dashboard import app_streamlit as dashboard
+        status = {
+            "status": "fresh",
+            "name": "default",
+            "error": None,
+            "manifest": {
+                "name": "default",
+                "schema_version": "1.0",
+                "market": "a_share_cn",
+                "symbols": ["SH600519", "SZ000001"],
+                "date_range": {"first": "2020-01-01", "last": "2026-06-20"},
+                "source_chain": ["mootdx", "manual-resset"],
+                "adjustment": {"convention": "backward", "method": "mootdx_hfq"},
+                "calendar": {"source": "mootdx", "exchange": "SSE_SZSE"},
+                "row_count": 4521,
+                "updated_at": "2026-06-23T00:00:00+00:00",
+                "freshness": {
+                    "expected_through": "2026-06-20",
+                    "actual_through": "2026-06-20",
+                    "status": "fresh",
+                },
+            },
+            "recent_provenance": [
+                {"ts": "2026-06-23T00:00:00+00:00", "op": "create", "status": "ok", "rows": 30},
+            ],
+        }
+        view = dashboard._bundle_view_data(status)
+        self.assertEqual(view["freshness_icon"], "🟢")
+        self.assertEqual(view["freshness_label"], "最新")
+        self.assertEqual(view["symbols"], ["SH600519", "SZ000001"])
+        self.assertEqual(view["date_range"]["first"], "2020-01-01")
+        self.assertEqual(view["source_chain"], ["mootdx", "manual-resset"])
+        self.assertEqual(view["adjustment"]["method"], "mootdx_hfq")
+        self.assertEqual(view["row_count"], 4521)
+        self.assertEqual(len(view["recent_provenance"]), 1)
+
+    def test_stale_bundle_view(self):
+        from dashboard import app_streamlit as dashboard
+        view = dashboard._bundle_view_data({
+            "status": "stale",
+            "name": "default",
+            "error": None,
+            "manifest": {"symbols": ["SH600519"], "row_count": 10},
+            "recent_provenance": [],
+        })
+        self.assertEqual(view["freshness_icon"], "🟡")
+        self.assertEqual(view["freshness_label"], "需要更新")
+
+    def test_error_status_propagates(self):
+        from dashboard import app_streamlit as dashboard
+        view = dashboard._bundle_view_data({
+            "status": "error",
+            "name": "default",
+            "error": "manifest corrupt",
+            "manifest": None,
+            "recent_provenance": [],
+        })
+        self.assertEqual(view["freshness_icon"], "🔴")
+        self.assertEqual(view["error"], "manifest corrupt")
+
+
+class TestDashboardInputHelpers(unittest.TestCase):
+    def test_symbol_input_parser_accepts_comma_space_and_chinese_comma(self):
+        from dashboard import app_streamlit as dashboard
+        self.assertEqual(
+            dashboard._symbol_input_to_list("600519, 000001，000002\n300750"),
+            ["600519", "000001", "000002", "300750"],
+        )
+
+    def test_symbols_to_input_prefers_bare_codes_for_a_share(self):
+        from dashboard import app_streamlit as dashboard
+        self.assertEqual(
+            dashboard._symbols_to_input(["SH600519", "SZ000001", "SYNTHAAA"]),
+            "600519, 000001, SYNTHAAA",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
